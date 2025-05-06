@@ -1,4 +1,4 @@
-package dockerutil
+package docker
 
 import (
 	"github.com/docker/docker/api/types"

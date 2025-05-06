@@ -1,4 +1,4 @@
-package dockerutil
+package docker
 
 import (
 	"context"
@@ -41,7 +41,7 @@ func (c *ContainerLifecycle) CreateContainer(
 	ctx context.Context,
 	testName string,
 	networkID string,
-	image DockerImage,
+	image Image,
 	ports nat.PortMap,
 	ipAddr string,
 	volumeBinds []string,

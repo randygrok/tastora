@@ -1,4 +1,4 @@
-package dockerutil
+package docker
 
 import (
 	"github.com/chatton/celestia-test/framework/testutil/random"

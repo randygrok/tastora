@@ -1,0 +1,3 @@
+test: ## Run unit tests
+	@go test -cover -short -timeout=30m -failfast ./...
+.PHONY: test

@@ -1,20 +1,24 @@
 package docker
 
-import "github.com/chatton/celestia-test/framework/types"
+import (
+	"context"
+	"github.com/chatton/celestia-test/framework/types"
+)
 
 var _ types.ChainProvider = &Provider{}
 
 type Provider struct {
-	cfg Config
+	cfg      Config
+	testName string
 }
 
-func (p *Provider) GetChain() (types.Chain, error) {
-
-	panic("implement me")
+func (p *Provider) GetChain(ctx context.Context) (types.Chain, error) {
+	return newChain(ctx, p.testName, p.cfg)
 }
 
-func NewProvider(cfg Config) *Provider {
+func NewProvider(cfg Config, testName string) *Provider {
 	return &Provider{
-		cfg: cfg,
+		cfg:      cfg,
+		testName: testName,
 	}
 }

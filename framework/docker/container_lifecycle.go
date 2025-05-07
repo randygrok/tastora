@@ -41,7 +41,7 @@ func (c *ContainerLifecycle) CreateContainer(
 	ctx context.Context,
 	testName string,
 	networkID string,
-	image Image,
+	image DockerImage,
 	ports nat.PortMap,
 	ipAddr string,
 	volumeBinds []string,

@@ -7,7 +7,7 @@ import (
 )
 
 type Config struct {
-	Log *zap.Logger
+	Logger *zap.Logger
 	// DockerClient is a Docker client instance used for the tests.
 	DockerClient *client.Client
 	// DockerNetworkID is the ID of the docker network the nodes are deployed to.
@@ -24,7 +24,7 @@ type Config struct {
 	// Chain ID, e.g. cosmoshub-4
 	ChainID string `yaml:"chain-id"`
 	// Docker images required for running chain nodes.
-	Images []Image
+	Images []DockerImage
 	// Binary to execute for the chain node daemon.
 	Bin string `yaml:"bin"`
 	// Bech32 prefix for chain addresses, e.g. cosmos.

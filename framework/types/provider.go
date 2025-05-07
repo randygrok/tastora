@@ -1,5 +1,7 @@
 package types
 
+import "context"
+
 type ChainProvider interface {
-	GetChain() (Chain, error)
+	GetChain(ctx context.Context) (Chain, error)
 }

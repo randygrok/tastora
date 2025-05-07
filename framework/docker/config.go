@@ -42,7 +42,7 @@ type Config struct {
 	// Trusting period of the chain.
 	TrustingPeriod string
 	// Do not use docker host mount.
-	NoHostMount bool `yaml:"no-host-mount"`
+	NoHostMount bool
 	// When provided, genesis file contents will be altered before sharing for genesis.
 	ModifyGenesis func(Config, []byte) ([]byte, error)
 	// Override config parameters for files at filepath.
@@ -50,7 +50,7 @@ type Config struct {
 	// Non-nil will override the encoding config, used for cosmos chains only.
 	EncodingConfig *testutil.TestEncodingConfig
 	// To avoid port binding conflicts, ports are only exposed on the 0th validator.
-	HostPortOverride map[int]int `yaml:"host-port-override"`
+	HostPortOverride map[int]int
 	// ExposeAdditionalPorts exposes each port id to the host on a random port. ex: "8080/tcp"
 	// Access the address with ChainNode.GetHostAddress
 	ExposeAdditionalPorts []string

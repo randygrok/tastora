@@ -16,12 +16,9 @@ import (
 )
 
 // FileRetriever allows retrieving a single file from a Docker volume.
-// In the future it may allow retrieving an entire directory.
 type FileRetriever struct {
-	log *zap.Logger
-
-	cli *client.Client
-
+	log      *zap.Logger
+	cli      *client.Client
 	testName string
 }
 

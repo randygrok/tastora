@@ -12,6 +12,13 @@ type Config struct {
 	DockerClient *client.Client
 	// DockerNetworkID is the ID of the docker network the nodes are deployed to.
 	DockerNetworkID string
+	// ChainConfig defines configuration specific to the app chain.
+	ChainConfig *ChainConfig
+	// BridgeNodeConfig defines the configuration specific to bridge nodes.
+	BridgeNodeConfig *BridgeNodeConfig
+}
+
+type ChainConfig struct {
 	// Chain type, e.g. cosmos.
 	Type string `yaml:"type"`
 	// Chain name, e.g. cosmoshub.
@@ -22,15 +29,15 @@ type Config struct {
 	// How many validators and how many full nodes to use when instantiating the chain.
 	NumValidators, NumFullNodes *int
 	// Chain ID, e.g. cosmoshub-4
-	ChainID string `yaml:"chain-id"`
+	ChainID string
 	// Docker images required for running chain nodes.
 	Images []DockerImage
 	// Binary to execute for the chain node daemon.
 	Bin string `yaml:"bin"`
 	// Bech32 prefix for chain addresses, e.g. cosmos.
-	Bech32Prefix string `yaml:"bech32-prefix"`
+	Bech32Prefix string
 	// Denomination of native currency, e.g. uatom.
-	Denom string `yaml:"denom"`
+	Denom string
 	// Coin type
 	CoinType string
 	// Minimum gas prices for sending transactions, in native currency denom.
@@ -58,4 +65,11 @@ type Config struct {
 	AdditionalStartArgs []string
 	// Environment variables for chain nodes
 	Env []string
+}
+
+type BridgeNodeConfig struct {
+	// ChainID should be the chain ID of the host being pointed to by --core.ip
+	ChainID string
+	// Docker images required for running bridge nodes.
+	Images []DockerImage
 }

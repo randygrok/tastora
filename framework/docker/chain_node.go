@@ -16,7 +16,6 @@ import (
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	stakingtypes "github.com/cosmos/cosmos-sdk/x/staking/types"
 	"github.com/docker/go-connections/nat"
-	dockerclient "github.com/moby/moby/client"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -27,7 +26,7 @@ import (
 	"time"
 )
 
-var _ types.Node = &ChainNode{}
+var _ types.ChainNode = &ChainNode{}
 
 const (
 	valKey      = "validator"
@@ -58,28 +57,26 @@ func (n *ChainNode) GetInternalRPCAddress(ctx context.Context) (string, error) {
 type ChainNodes []*ChainNode
 
 type ChainNode struct {
-	VolumeName   string
+	*node
 	Index        int
 	cfg          Config
 	Validator    bool
-	NetworkID    string
-	DockerClient *dockerclient.Client
 	Client       rpcclient.Client
 	GrpcConn     *grpc.ClientConn
-	TestName     string
-	Image        DockerImage
 	preStartNode func(*ChainNode)
 
 	lock sync.Mutex
 	log  *zap.Logger
-
-	containerLifecycle *ContainerLifecycle
 
 	// Ports set during StartContainer.
 	hostRPCPort  string
 	hostAPIPort  string
 	hostGRPCPort string
 	hostP2PPort  string
+}
+
+func (tn *ChainNode) GetInternalHostName(ctx context.Context) (string, error) {
+	return tn.HostName(), nil
 }
 
 func (tn *ChainNode) GetType() string {
@@ -96,13 +93,10 @@ func NewDockerChainNode(log *zap.Logger, validator bool, cfg Config, testName st
 			zap.Bool("validator", validator),
 			zap.Int("i", index),
 		),
-		Validator:    validator,
-		cfg:          cfg,
-		DockerClient: cfg.DockerClient,
-		NetworkID:    cfg.DockerNetworkID,
-		TestName:     testName,
-		Image:        image,
-		Index:        index,
+		Validator: validator,
+		cfg:       cfg,
+		node:      newNode(cfg.DockerNetworkID, cfg.DockerClient, testName, image, path.Join("/var/cosmos-chain", cfg.ChainConfig.Name)),
+		Index:     index,
 	}
 
 	tn.containerLifecycle = NewContainerLifecycle(log, cfg.DockerClient, tn.Name())
@@ -117,7 +111,7 @@ func (tn *ChainNode) HostName() string {
 
 // Name of the test node container.
 func (tn *ChainNode) Name() string {
-	return fmt.Sprintf("%s-%s-%d-%s", tn.cfg.ChainID, tn.NodeType(), tn.Index, SanitizeContainerName(tn.TestName))
+	return fmt.Sprintf("%s-%s-%d-%s", tn.cfg.ChainConfig.ChainID, tn.NodeType(), tn.Index, SanitizeContainerName(tn.TestName))
 }
 
 func (tn *ChainNode) NodeType() string {
@@ -154,25 +148,10 @@ func (tn *ChainNode) RemoveContainer(ctx context.Context) error {
 // pass ("keys", "show", "key1") for command to return the full command.
 // Will include additional flags for home directory and chain ID.
 func (tn *ChainNode) BinCommand(command ...string) []string {
-	command = append([]string{tn.cfg.Bin}, command...)
+	command = append([]string{tn.cfg.ChainConfig.Bin}, command...)
 	return append(command,
-		"--home", tn.HomeDir(),
+		"--home", tn.homeDir,
 	)
-}
-
-func (tn *ChainNode) Exec(ctx context.Context, cmd []string, env []string) ([]byte, []byte, error) {
-	job := NewImage(tn.logger(), tn.DockerClient, tn.NetworkID, tn.TestName, tn.Image.Repository, tn.Image.Version)
-	opts := ContainerOptions{
-		Env:   env,
-		Binds: tn.Bind(),
-	}
-	res := job.Run(ctx, cmd, opts)
-	return res.Stdout, res.Stderr, res.Err
-}
-
-// Bind returns the home folder bind point for running the node.
-func (tn *ChainNode) Bind() []string {
-	return []string{fmt.Sprintf("%s:%s", tn.VolumeName, tn.HomeDir())}
 }
 
 // ExecBin is a helper to execute a command for a chain node binary.
@@ -180,7 +159,7 @@ func (tn *ChainNode) Bind() []string {
 // pass ("keys", "show", "key1") for command to execute the command against the node.
 // Will include additional flags for home directory and chain ID.
 func (tn *ChainNode) ExecBin(ctx context.Context, command ...string) ([]byte, []byte, error) {
-	return tn.Exec(ctx, tn.BinCommand(command...), tn.cfg.Env)
+	return tn.Exec(ctx, tn.logger(), tn.BinCommand(command...), tn.cfg.ChainConfig.Env)
 }
 
 // InitHomeFolder initializes a home folder for the given node.
@@ -190,7 +169,7 @@ func (tn *ChainNode) InitHomeFolder(ctx context.Context) error {
 
 	_, _, err := tn.ExecBin(ctx,
 		"init", CondenseMoniker(tn.Name()),
-		"--chain-id", tn.cfg.ChainID,
+		"--chain-id", tn.cfg.ChainConfig.ChainID,
 	)
 	return err
 }
@@ -238,7 +217,7 @@ func (tn *ChainNode) SetTestConfig(ctx context.Context) error {
 	}
 
 	a := make(toml.Toml)
-	a["minimum-gas-prices"] = tn.cfg.GasPrices
+	a["minimum-gas-prices"] = tn.cfg.ChainConfig.GasPrices
 
 	grpc := make(toml.Toml)
 
@@ -269,13 +248,9 @@ func (tn *ChainNode) SetTestConfig(ctx context.Context) error {
 
 func (tn *ChainNode) logger() *zap.Logger {
 	return tn.cfg.Logger.With(
-		zap.String("chain_id", tn.cfg.ChainID),
+		zap.String("chain_id", tn.cfg.ChainConfig.ChainID),
 		zap.String("test", tn.TestName),
 	)
-}
-
-func (tn *ChainNode) HomeDir() string {
-	return path.Join("/var/cosmos-chain", tn.cfg.Name)
 }
 
 func (tn *ChainNode) StartContainer(ctx context.Context) error {
@@ -357,17 +332,17 @@ func (tn *ChainNode) SetPeers(ctx context.Context, peers string) error {
 }
 
 func (tn *ChainNode) CreateNodeContainer(ctx context.Context) error {
-	chainCfg := tn.cfg
+	chainCfg := tn.cfg.ChainConfig
 
 	var cmd []string
 	if chainCfg.NoHostMount {
-		startCmd := fmt.Sprintf("cp -r %s %s_nomnt && %s start --home %s_nomnt", tn.HomeDir(), tn.HomeDir(), chainCfg.Bin, tn.HomeDir())
+		startCmd := fmt.Sprintf("cp -r %s %s_nomnt && %s start --home %s_nomnt", tn.homeDir, tn.homeDir, chainCfg.Bin, tn.homeDir)
 		if len(chainCfg.AdditionalStartArgs) > 0 {
 			startCmd = fmt.Sprintf("%s %s", startCmd, chainCfg.AdditionalStartArgs)
 		}
 		cmd = []string{"sh", "-c", startCmd}
 	} else {
-		cmd = []string{chainCfg.Bin, "start", "--home", tn.HomeDir()}
+		cmd = []string{chainCfg.Bin, "start", "--home", tn.homeDir}
 		if len(chainCfg.AdditionalStartArgs) > 0 {
 			cmd = append(cmd, chainCfg.AdditionalStartArgs...)
 		}
@@ -419,9 +394,9 @@ func (tn *ChainNode) CollectGentxs(ctx context.Context) error {
 	tn.lock.Lock()
 	defer tn.lock.Unlock()
 
-	command := []string{tn.cfg.Bin, "genesis", "collect-gentxs", "--home", tn.HomeDir()}
+	command := []string{tn.cfg.ChainConfig.Bin, "genesis", "collect-gentxs", "--home", tn.homeDir}
 
-	_, _, err := tn.Exec(ctx, command, tn.cfg.Env)
+	_, _, err := tn.Exec(ctx, tn.logger(), command, tn.cfg.ChainConfig.Env)
 	return err
 }
 
@@ -542,7 +517,7 @@ func (tn *ChainNode) CreateKey(ctx context.Context, name string) error {
 
 	_, _, err := tn.ExecBin(ctx,
 		"keys", "add", name,
-		"--coin-type", tn.cfg.CoinType,
+		"--coin-type", tn.cfg.ChainConfig.CoinType,
 		"--keyring-backend", keyring.BackendTest,
 	)
 	return err
@@ -554,10 +529,10 @@ func (tn *ChainNode) Gentx(ctx context.Context, name string, genesisSelfDelegati
 	defer tn.lock.Unlock()
 
 	command := []string{"genesis", "gentx", name, fmt.Sprintf("%s%s", genesisSelfDelegation.Amount.String(), genesisSelfDelegation.Denom),
-		"--gas-prices", tn.cfg.GasPrices,
-		"--gas-adjustment", fmt.Sprint(tn.cfg.GasAdjustment),
+		"--gas-prices", tn.cfg.ChainConfig.GasPrices,
+		"--gas-adjustment", fmt.Sprint(tn.cfg.ChainConfig.GasAdjustment),
 		"--keyring-backend", keyring.BackendTest,
-		"--chain-id", tn.cfg.ChainID,
+		"--chain-id", tn.cfg.ChainConfig.ChainID,
 	}
 
 	_, _, err := tn.ExecBin(ctx, command...)
@@ -573,8 +548,8 @@ func (tn *ChainNode) AccountKeyBech32(ctx context.Context, name string) (string,
 // bech is the bech32 prefix (acc|val|cons). If empty, defaults to the account key (same as "acc").
 func (tn *ChainNode) KeyBech32(ctx context.Context, name string, bech string) (string, error) {
 	command := []string{
-		tn.cfg.Bin, "keys", "show", "--address", name,
-		"--home", tn.HomeDir(),
+		tn.cfg.ChainConfig.Bin, "keys", "show", "--address", name,
+		"--home", tn.homeDir,
 		"--keyring-backend", keyring.BackendTest,
 	}
 
@@ -582,7 +557,7 @@ func (tn *ChainNode) KeyBech32(ctx context.Context, name string, bech string) (s
 		command = append(command, "--bech", bech)
 	}
 
-	stdout, stderr, err := tn.Exec(ctx, command, tn.cfg.Env)
+	stdout, stderr, err := tn.Exec(ctx, tn.logger(), command, tn.cfg.ChainConfig.Env)
 	if err != nil {
 		return "", fmt.Errorf("failed to show key %q (stderr=%q): %w", name, stderr, err)
 	}

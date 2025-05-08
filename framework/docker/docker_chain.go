@@ -39,8 +39,11 @@ var sentryPorts = nat.PortMap{
 }
 
 func newChain(ctx context.Context, testName string, cfg Config) (types.Chain, error) {
-	if cfg.EncodingConfig == nil {
-		panic("chain config must have an encoding config set")
+	if cfg.ChainConfig == nil {
+		return nil, fmt.Errorf("chain config must be set")
+	}
+	if cfg.ChainConfig.EncodingConfig == nil {
+		return nil, fmt.Errorf("chain config must have an encoding config set")
 	}
 
 	registry := codectypes.NewInterfaceRegistry()
@@ -49,13 +52,13 @@ func newChain(ctx context.Context, testName string, cfg Config) (types.Chain, er
 	kr := keyring.NewInMemory(cdc)
 
 	// If unspecified, NumValidators defaults to 2 and NumFullNodes defaults to 1.
-	if cfg.NumValidators == nil {
+	if cfg.ChainConfig.NumValidators == nil {
 		nv := defaultNumValidators
-		cfg.NumValidators = &nv
+		cfg.ChainConfig.NumValidators = &nv
 	}
-	if cfg.NumFullNodes == nil {
+	if cfg.ChainConfig.NumFullNodes == nil {
 		nf := defaultNumFullNodes
-		cfg.NumFullNodes = &nf
+		cfg.ChainConfig.NumFullNodes = &nf
 	}
 
 	c := &Chain{
@@ -150,8 +153,8 @@ func (c *Chain) AddFullNodes(ctx context.Context, configFileOverrides map[string
 	return eg.Wait()
 }
 
-func (c *Chain) GetNodes() []types.Node {
-	var nodes []types.Node
+func (c *Chain) GetNodes() []types.ChainNode {
+	var nodes []types.ChainNode
 	for _, n := range c.Nodes() {
 		nodes = append(nodes, n)
 	}
@@ -177,17 +180,17 @@ func (c *Chain) Height(ctx context.Context) (int64, error) {
 }
 
 func (c *Chain) Start(ctx context.Context) error {
-	chainCfg := c.cfg
+	cfg := c.cfg
 
 	genesisAmounts := make([][]sdk.Coin, len(c.Validators))
 	genesisSelfDelegation := make([]sdk.Coin, len(c.Validators))
 
 	for i := range c.Validators {
-		genesisAmounts[i] = []sdk.Coin{{Amount: sdkmath.NewInt(10_000_000_000_000), Denom: chainCfg.Denom}}
-		genesisSelfDelegation[i] = sdk.Coin{Amount: sdkmath.NewInt(5_000_000), Denom: chainCfg.Denom}
+		genesisAmounts[i] = []sdk.Coin{{Amount: sdkmath.NewInt(10_000_000_000_000), Denom: cfg.ChainConfig.Denom}}
+		genesisSelfDelegation[i] = sdk.Coin{Amount: sdkmath.NewInt(5_000_000), Denom: cfg.ChainConfig.Denom}
 	}
 
-	configFileOverrides := chainCfg.ConfigFileOverrides
+	configFileOverrides := cfg.ChainConfig.ConfigFileOverrides
 
 	eg := new(errgroup.Group)
 	// Initialize config and sign gentx for each validator.
@@ -280,10 +283,10 @@ func (c *Chain) Start(ctx context.Context) error {
 		return err
 	}
 
-	genbz = bytes.ReplaceAll(genbz, []byte(`"stake"`), []byte(fmt.Sprintf(`"%s"`, chainCfg.Denom)))
+	genbz = bytes.ReplaceAll(genbz, []byte(`"stake"`), []byte(fmt.Sprintf(`"%s"`, cfg.ChainConfig.Denom)))
 
-	if c.cfg.ModifyGenesis != nil {
-		genbz, err = c.cfg.ModifyGenesis(chainCfg, genbz)
+	if c.cfg.ChainConfig.ModifyGenesis != nil {
+		genbz, err = c.cfg.ChainConfig.ModifyGenesis(cfg, genbz)
 		if err != nil {
 			return err
 		}
@@ -307,7 +310,7 @@ func (c *Chain) Start(ctx context.Context) error {
 		return err
 	}
 
-	typedNodes := make([]types.Node, len(chainNodes))
+	typedNodes := make([]types.ChainNode, len(chainNodes))
 	for i, n := range chainNodes {
 		typedNodes[i] = n
 	}
@@ -360,11 +363,11 @@ func (c *Chain) initializeChainNodes(
 	testName string,
 ) error {
 
-	numValidators := *c.cfg.NumValidators
+	numValidators := *c.cfg.ChainConfig.NumValidators
 
 	chainCfg := c.cfg
 	c.pullImages(ctx)
-	image := chainCfg.Images[0]
+	image := chainCfg.ChainConfig.Images[0]
 
 	newVals := make(ChainNodes, numValidators)
 	copy(newVals, c.Validators)
@@ -440,7 +443,7 @@ func (c *Chain) newChainNode(
 }
 
 func (c *Chain) pullImages(ctx context.Context) {
-	for _, image := range c.cfg.Images {
+	for _, image := range c.cfg.ChainConfig.Images {
 		if image.Version == "local" {
 			continue
 		}

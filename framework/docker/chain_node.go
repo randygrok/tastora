@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/avast/retry-go/v4"
 	"github.com/chatton/celestia-test/framework/docker/file"
 	"github.com/chatton/celestia-test/framework/testutil/toml"
 	"github.com/chatton/celestia-test/framework/types"
@@ -271,19 +270,33 @@ func (tn *ChainNode) StartContainer(ctx context.Context) error {
 		return err
 	}
 
+	// wait a short period of time for the node to come online.
 	time.Sleep(5 * time.Second)
-	return retry.Do(func() error {
-		stat, err := tn.Client.Status(ctx)
-		if err != nil {
-			return err
+
+	ticker := time.NewTicker(3 * time.Second)
+	defer ticker.Stop()
+
+	timeout := time.After(2 * time.Minute)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("context cancelled while waiting for node sync: %w", ctx.Err())
+		case <-timeout:
+			return fmt.Errorf("node did not finish syncing within timeout")
+		case <-ticker.C:
+			stat, err := tn.Client.Status(ctx)
+			if err != nil {
+				continue // retry on transient error
+			}
+
+			if stat != nil && stat.SyncInfo.CatchingUp {
+				continue // still catching up, wait for next tick.
+			}
+			// node is synced
+			return nil
 		}
-		// TODO: re-enable this check, having trouble with it for some reason
-		if stat != nil && stat.SyncInfo.CatchingUp {
-			return fmt.Errorf("still catching up: height(%d) catching-up(%t)",
-				stat.SyncInfo.LatestBlockHeight, stat.SyncInfo.CatchingUp)
-		}
-		return nil
-	}, retry.Context(ctx), retry.Attempts(40), retry.Delay(3*time.Second), retry.DelayType(retry.FixedDelay))
+	}
 }
 
 // NewClient creates and assigns a new Tendermint RPC client to the ChainNode.

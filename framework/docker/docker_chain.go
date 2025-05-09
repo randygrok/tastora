@@ -89,6 +89,7 @@ type Chain struct {
 	log          *zap.Logger
 	keyring      keyring.Keyring
 	findTxMu     sync.Mutex
+	faucetWallet *types.Wallet
 }
 
 func (c *Chain) AddNode(ctx context.Context, overrides map[string]any) error {
@@ -281,6 +282,7 @@ func (c *Chain) Start(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to create faucet wallet: %w", err)
 	}
+	c.faucetWallet = wallet
 
 	if err := validator0.addGenesisAccount(ctx, wallet.FormattedAddress, []sdk.Coin{{Denom: c.cfg.ChainConfig.Denom, Amount: sdkmath.NewInt(10_000_000_000_000)}}); err != nil {
 		return err

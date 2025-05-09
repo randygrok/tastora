@@ -6,6 +6,14 @@ type Wallet struct {
 	KeyName          string
 }
 
+func (w *Wallet) GetKeyName() string {
+	return w.KeyName
+}
+
+func (w *Wallet) GetFormattedAddress() string {
+	return w.FormattedAddress
+}
+
 func NewWallet(address []byte, formattedAddress string, keyName string) Wallet {
 	return Wallet{
 		Address:          address,

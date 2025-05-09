@@ -26,17 +26,17 @@ type ClientContextOpt func(clientContext client.Context) client.Context
 
 type FactoryOpt func(factory tx.Factory) tx.Factory
 
-type User interface {
-	KeyName() string
-	FormattedAddress() string
+type Wallet interface {
+	GetKeyName() string
+	GetFormattedAddress() string
 }
 
 type Broadcaster struct {
 	// buf stores the output sdk.TxResponse when broadcast.Tx is invoked.
 	buf *bytes.Buffer
 	// keyrings is a mapping of keyrings which point to a temporary test directory. The contents
-	// of this directory are copied from the node container for the specific user.
-	keyrings map[User]keyring.Keyring
+	// of this directory are copied from the node container for the specific wallet.
+	keyrings map[Wallet]keyring.Keyring
 
 	// chain is a reference to the Chain instance which will be the target of the messages.
 	chain *Chain
@@ -65,7 +65,7 @@ func NewBroadcaster(t *testing.T, chain types.Chain) *Broadcaster {
 		t:        t,
 		chain:    dockerChain,
 		buf:      &bytes.Buffer{},
-		keyrings: map[User]keyring.Keyring{},
+		keyrings: map[Wallet]keyring.Keyring{},
 	}
 }
 
@@ -82,15 +82,15 @@ func (b *Broadcaster) ConfigureClientContextOptions(opts ...ClientContextOpt) {
 }
 
 // GetFactory returns an instance of tx.Factory that is configured with this Broadcaster's Chain
-// and the provided user. ConfigureFactoryOptions can be used to specify arbitrary options to configure the returned
+// and the provided wallet. ConfigureFactoryOptions can be used to specify arbitrary options to configure the returned
 // factory.
-func (b *Broadcaster) GetFactory(ctx context.Context, user User) (tx.Factory, error) {
-	clientContext, err := b.GetClientContext(ctx, user)
+func (b *Broadcaster) GetFactory(ctx context.Context, wallet Wallet) (tx.Factory, error) {
+	clientContext, err := b.GetClientContext(ctx, wallet)
 	if err != nil {
 		return tx.Factory{}, err
 	}
 
-	sdkAdd, err := accAddressFromBech32(user.FormattedAddress(), b.chain.cfg.ChainConfig.Bech32Prefix)
+	sdkAdd, err := accAddressFromBech32(wallet.GetFormattedAddress(), b.chain.cfg.ChainConfig.Bech32Prefix)
 	if err != nil {
 		return tx.Factory{}, err
 	}
@@ -108,13 +108,13 @@ func (b *Broadcaster) GetFactory(ctx context.Context, user User) (tx.Factory, er
 }
 
 // GetClientContext returns a client context that is configured with this Broadcaster's Chain and
-// the provided user. ConfigureClientContextOptions can be used to configure arbitrary options to configure the returned
+// the provided wallet. ConfigureClientContextOptions can be used to configure arbitrary options to configure the returned
 // client.Context.
-func (b *Broadcaster) GetClientContext(ctx context.Context, user User) (client.Context, error) {
+func (b *Broadcaster) GetClientContext(ctx context.Context, wallet Wallet) (client.Context, error) {
 	chain := b.chain
 	cn := chain.GetNode()
 
-	_, ok := b.keyrings[user]
+	_, ok := b.keyrings[wallet]
 	if !ok {
 		localDir := b.t.TempDir()
 		containerKeyringDir := path.Join(cn.homeDir, "keyring-test")
@@ -122,15 +122,15 @@ func (b *Broadcaster) GetClientContext(ctx context.Context, user User) (client.C
 		if err != nil {
 			return client.Context{}, err
 		}
-		b.keyrings[user] = kr
+		b.keyrings[wallet] = kr
 	}
 
-	sdkAdd, err := accAddressFromBech32(user.FormattedAddress(), b.chain.cfg.ChainConfig.Bech32Prefix)
+	sdkAdd, err := accAddressFromBech32(wallet.GetFormattedAddress(), b.chain.cfg.ChainConfig.Bech32Prefix)
 	if err != nil {
 		return client.Context{}, err
 	}
 
-	clientContext := b.defaultClientContext(user, sdkAdd)
+	clientContext := b.defaultClientContext(wallet, sdkAdd)
 	for _, opt := range b.clientContextOptions {
 		clientContext = opt(clientContext)
 	}
@@ -138,7 +138,7 @@ func (b *Broadcaster) GetClientContext(ctx context.Context, user User) (client.C
 }
 
 // GetTxResponseBytes returns the sdk.TxResponse bytes which returned from broadcast.Tx.
-func (b *Broadcaster) GetTxResponseBytes(ctx context.Context, user User) ([]byte, error) {
+func (b *Broadcaster) GetTxResponseBytes(ctx context.Context, wallet Wallet) ([]byte, error) {
 	if b.buf == nil || b.buf.Len() == 0 {
 		return nil, fmt.Errorf("empty buffer, transaction has not been executed yet")
 	}
@@ -164,17 +164,17 @@ func (b *Broadcaster) UnmarshalTxResponseBytes(ctx context.Context, bytes []byte
 	return resp, nil
 }
 
-// defaultClientContext returns a default client context configured with the user as the sender.
-func (b *Broadcaster) defaultClientContext(fromUser User, sdkAdd sdk.AccAddress) client.Context {
+// defaultClientContext returns a default client context configured with the wallet as the sender.
+func (b *Broadcaster) defaultClientContext(fromWallet Wallet, sdkAdd sdk.AccAddress) client.Context {
 	// initialize a clean buffer each time
 	b.buf.Reset()
-	kr := b.keyrings[fromUser]
+	kr := b.keyrings[fromWallet]
 	cn := b.chain.GetNode()
 	return cn.CliContext().
 		WithOutput(b.buf).
-		WithFrom(fromUser.FormattedAddress()).
+		WithFrom(fromWallet.GetFormattedAddress()).
 		WithFromAddress(sdkAdd).
-		WithFromName(fromUser.KeyName()).
+		WithFromName(fromWallet.GetKeyName()).
 		WithSkipConfirmation(true).
 		WithAccountRetriever(AccountRetriever{chain: b.chain, prefix: b.chain.cfg.ChainConfig.Bech32Prefix}).
 		WithKeyring(kr).
@@ -204,14 +204,14 @@ func (b *Broadcaster) defaultTxFactory(clientCtx client.Context, account client.
 }
 
 // BroadcastTx uses the provided Broadcaster to broadcast all the provided messages which will be signed
-// by the User provided. The sdk.TxResponse and an error are returned.
-func BroadcastTx(ctx context.Context, broadcaster *Broadcaster, broadcastingUser User, msgs ...sdk.Msg) (sdk.TxResponse, error) {
-	f, err := broadcaster.GetFactory(ctx, broadcastingUser)
+// by the Wallet provided. The sdk.TxResponse and an error are returned.
+func BroadcastTx(ctx context.Context, broadcaster *Broadcaster, broadcastingWallet Wallet, msgs ...sdk.Msg) (sdk.TxResponse, error) {
+	f, err := broadcaster.GetFactory(ctx, broadcastingWallet)
 	if err != nil {
 		return sdk.TxResponse{}, err
 	}
 
-	cc, err := broadcaster.GetClientContext(ctx, broadcastingUser)
+	cc, err := broadcaster.GetClientContext(ctx, broadcastingWallet)
 	if err != nil {
 		return sdk.TxResponse{}, err
 	}
@@ -220,14 +220,14 @@ func BroadcastTx(ctx context.Context, broadcaster *Broadcaster, broadcastingUser
 		return sdk.TxResponse{}, err
 	}
 
-	txBytes, err := broadcaster.GetTxResponseBytes(ctx, broadcastingUser)
+	txBytes, err := broadcaster.GetTxResponseBytes(ctx, broadcastingWallet)
 	if err != nil {
 		return sdk.TxResponse{}, err
 	}
 
 	err = wait.ForCondition(ctx, time.Second*30, time.Second*5, func() (bool, error) {
 		var err error
-		txBytes, err = broadcaster.GetTxResponseBytes(ctx, broadcastingUser)
+		txBytes, err = broadcaster.GetTxResponseBytes(ctx, broadcastingWallet)
 		if err != nil {
 			return false, nil
 		}

@@ -37,7 +37,7 @@ func newBridgeNode(ctx context.Context, testName string, cfg Config) (types.Node
 		log: cfg.Logger.With(
 			zap.String("node_type", "bridge"),
 		),
-		node: newNode(cfg.DockerNetworkID, cfg.DockerClient, testName, image, "/home/celestia"),
+		node: newNode(cfg.DockerNetworkID, cfg.DockerClient, testName, image, "/home/celestia", "bridge"),
 	}
 
 	bn.containerLifecycle = NewContainerLifecycle(cfg.Logger, cfg.DockerClient, bn.Name())
@@ -78,9 +78,9 @@ type BridgeNode struct {
 	hostP2PPort string
 }
 
-// Name of the test node container.
-func (b *BridgeNode) Name() string {
-	return fmt.Sprintf("%s-%s", b.GetType(), SanitizeContainerName(b.TestName))
+// Stop terminates the BridgeNode by removing its associated container gracefully using the provided context.
+func (b *BridgeNode) Stop(ctx context.Context) error {
+	return b.RemoveContainer(ctx)
 }
 
 // Start initializes and starts the BridgeNode with the provided core IP and genesis hash in the given context.
@@ -95,16 +95,6 @@ func (b *BridgeNode) Start(ctx context.Context, coreIp string, genesisHash strin
 	}
 
 	return nil
-}
-
-// Stop gracefully stops and removes the container associated with the BridgeNode using the provided context.
-func (b *BridgeNode) Stop(ctx context.Context) error {
-	return b.containerLifecycle.RemoveContainer(ctx)
-}
-
-// GetType returns the node type as a string. For `BridgeNode`, it always returns "bridge".
-func (b *BridgeNode) GetType() string {
-	return "bridge"
 }
 
 // disableRPCAuth disables RPC authentication so that the tests can use the endpoints without configuring auth.
@@ -157,7 +147,7 @@ func (b *BridgeNode) startBridgeNode(ctx context.Context, coreIp, genesisHash st
 func (b *BridgeNode) initNode(ctx context.Context) error {
 	// note: my_celes_key is the default key name for the bridge node.
 	cmd := []string{"celestia", "bridge", "init", "--p2p.network", b.cfg.ChainID, "--keyring.keyname", "my_celes_key", "--node.store", b.homeDir}
-	_, _, err := b.Exec(ctx, b.log, cmd, nil)
+	_, _, err := b.exec(ctx, b.log, cmd, nil)
 	return err
 }
 
@@ -169,10 +159,5 @@ func (b *BridgeNode) CreateNodeContainer(ctx context.Context, coreIp string, env
 		usingPorts[k] = v
 	}
 
-	return b.containerLifecycle.CreateContainer(ctx, b.TestName, b.NetworkID, b.Image, usingPorts, "", b.Bind(), nil, b.HostName(), cmd, env, []string{})
-}
-
-// HostName of the test node container.
-func (b *BridgeNode) HostName() string {
-	return CondenseHostName(b.Name())
+	return b.containerLifecycle.CreateContainer(ctx, b.TestName, b.NetworkID, b.Image, usingPorts, "", b.bind(), nil, b.HostName(), cmd, env, []string{})
 }

@@ -39,7 +39,7 @@ const (
 )
 
 func (n *ChainNode) GetInternalPeerAddress(ctx context.Context) (string, error) {
-	id, err := n.NodeID(ctx)
+	id, err := n.nodeID(ctx)
 	if err != nil {
 		return "", err
 	}
@@ -47,7 +47,7 @@ func (n *ChainNode) GetInternalPeerAddress(ctx context.Context) (string, error) 
 }
 
 func (n *ChainNode) GetInternalRPCAddress(ctx context.Context) (string, error) {
-	id, err := n.NodeID(ctx)
+	id, err := n.nodeID(ctx)
 	if err != nil {
 		return "", err
 	}
@@ -79,15 +79,16 @@ func (tn *ChainNode) GetInternalHostName(ctx context.Context) (string, error) {
 	return tn.HostName(), nil
 }
 
-func (tn *ChainNode) GetType() string {
-	return tn.NodeType()
-}
-
 func (tn *ChainNode) GetRPCClient() (rpcclient.Client, error) {
 	return tn.Client, nil
 }
 
 func NewDockerChainNode(log *zap.Logger, validator bool, cfg Config, testName string, image DockerImage, index int) *ChainNode {
+	nodeType := "fn"
+	if validator {
+		nodeType = "val"
+	}
+
 	tn := &ChainNode{
 		log: log.With(
 			zap.Bool("validator", validator),
@@ -95,7 +96,7 @@ func NewDockerChainNode(log *zap.Logger, validator bool, cfg Config, testName st
 		),
 		Validator: validator,
 		cfg:       cfg,
-		node:      newNode(cfg.DockerNetworkID, cfg.DockerClient, testName, image, path.Join("/var/cosmos-chain", cfg.ChainConfig.Name)),
+		node:      newNode(cfg.DockerNetworkID, cfg.DockerClient, testName, image, path.Join("/var/cosmos-chain", cfg.ChainConfig.Name), nodeType),
 		Index:     index,
 	}
 
@@ -104,16 +105,12 @@ func NewDockerChainNode(log *zap.Logger, validator bool, cfg Config, testName st
 	return tn
 }
 
-// HostName of the test node container.
-func (tn *ChainNode) HostName() string {
-	return CondenseHostName(tn.Name())
-}
-
 // Name of the test node container.
 func (tn *ChainNode) Name() string {
 	return fmt.Sprintf("%s-%s-%d-%s", tn.cfg.ChainConfig.ChainID, tn.NodeType(), tn.Index, SanitizeContainerName(tn.TestName))
 }
 
+// NodeType returns the type of the ChainNode as a string: "fn" for full nodes and "val" for validator nodes.
 func (tn *ChainNode) NodeType() string {
 	nodeType := "fn"
 	if tn.Validator {
@@ -122,6 +119,7 @@ func (tn *ChainNode) NodeType() string {
 	return nodeType
 }
 
+// Height retrieves the latest block height of the chain node using the Tendermint RPC client.
 func (tn *ChainNode) Height(ctx context.Context) (int64, error) {
 	res, err := tn.Client.Status(ctx)
 	if err != nil {
@@ -131,51 +129,47 @@ func (tn *ChainNode) Height(ctx context.Context) (int64, error) {
 	return height, nil
 }
 
-func (tn *ChainNode) InitFullNodeFiles(ctx context.Context) error {
-	if err := tn.InitHomeFolder(ctx); err != nil {
+func (tn *ChainNode) initFullNodeFiles(ctx context.Context) error {
+	if err := tn.initHomeFolder(ctx); err != nil {
 		return err
 	}
 
-	return tn.SetTestConfig(ctx)
+	return tn.setTestConfig(ctx)
 }
 
-func (tn *ChainNode) RemoveContainer(ctx context.Context) error {
-	return tn.containerLifecycle.RemoveContainer(ctx)
-}
-
-// BinCommand is a helper to retrieve a full command for a chain node binary.
+// binCommand is a helper to retrieve a full command for a chain node binary.
 // For example, if chain node binary is `gaiad`, and desired command is `gaiad keys show key1`,
 // pass ("keys", "show", "key1") for command to return the full command.
 // Will include additional flags for home directory and chain ID.
-func (tn *ChainNode) BinCommand(command ...string) []string {
+func (tn *ChainNode) binCommand(command ...string) []string {
 	command = append([]string{tn.cfg.ChainConfig.Bin}, command...)
 	return append(command,
 		"--home", tn.homeDir,
 	)
 }
 
-// ExecBin is a helper to execute a command for a chain node binary.
+// execBin is a helper to execute a command for a chain node binary.
 // For example, if chain node binary is `gaiad`, and desired command is `gaiad keys show key1`,
 // pass ("keys", "show", "key1") for command to execute the command against the node.
 // Will include additional flags for home directory and chain ID.
-func (tn *ChainNode) ExecBin(ctx context.Context, command ...string) ([]byte, []byte, error) {
-	return tn.Exec(ctx, tn.logger(), tn.BinCommand(command...), tn.cfg.ChainConfig.Env)
+func (tn *ChainNode) execBin(ctx context.Context, command ...string) ([]byte, []byte, error) {
+	return tn.exec(ctx, tn.logger(), tn.binCommand(command...), tn.cfg.ChainConfig.Env)
 }
 
-// InitHomeFolder initializes a home folder for the given node.
-func (tn *ChainNode) InitHomeFolder(ctx context.Context) error {
+// initHomeFolder initializes a home folder for the given node.
+func (tn *ChainNode) initHomeFolder(ctx context.Context) error {
 	tn.lock.Lock()
 	defer tn.lock.Unlock()
 
-	_, _, err := tn.ExecBin(ctx,
+	_, _, err := tn.execBin(ctx,
 		"init", CondenseMoniker(tn.Name()),
 		"--chain-id", tn.cfg.ChainConfig.ChainID,
 	)
 	return err
 }
 
-// SetTestConfig modifies the config to reasonable values for use within interchaintest.
-func (tn *ChainNode) SetTestConfig(ctx context.Context) error {
+// setTestConfig modifies the config to reasonable values for use within celestia-test.
+func (tn *ChainNode) setTestConfig(ctx context.Context) error {
 	c := make(toml.Toml)
 
 	// Set Log Level to info
@@ -253,7 +247,9 @@ func (tn *ChainNode) logger() *zap.Logger {
 	)
 }
 
-func (tn *ChainNode) StartContainer(ctx context.Context) error {
+// startContainer starts the container for the ChainNode, initializes its ports, and ensures the node is synced before returning.
+// Returns an error if the container fails to start, ports cannot be set, or syncing is not completed within the timeout.
+func (tn *ChainNode) startContainer(ctx context.Context) error {
 	if err := tn.containerLifecycle.StartContainer(ctx); err != nil {
 		return err
 	}
@@ -265,7 +261,7 @@ func (tn *ChainNode) StartContainer(ctx context.Context) error {
 	}
 	tn.hostRPCPort, tn.hostGRPCPort, tn.hostAPIPort, tn.hostP2PPort = hostPorts[0], hostPorts[1], hostPorts[2], hostPorts[3]
 
-	err = tn.NewClient("tcp://" + tn.hostRPCPort)
+	err = tn.initClient("tcp://" + tn.hostRPCPort)
 	if err != nil {
 		return err
 	}
@@ -299,8 +295,8 @@ func (tn *ChainNode) StartContainer(ctx context.Context) error {
 	}
 }
 
-// NewClient creates and assigns a new Tendermint RPC client to the ChainNode.
-func (tn *ChainNode) NewClient(addr string) error {
+// initClient creates and assigns a new Tendermint RPC client to the ChainNode.
+func (tn *ChainNode) initClient(addr string) error {
 	httpClient, err := libclient.DefaultHTTPClient(addr)
 	if err != nil {
 		return err
@@ -325,8 +321,8 @@ func (tn *ChainNode) NewClient(addr string) error {
 	return nil
 }
 
-// SetPeers modifies the config persistent_peers for a node.
-func (tn *ChainNode) SetPeers(ctx context.Context, peers string) error {
+// setPeers modifies the config persistent_peers for a node.
+func (tn *ChainNode) setPeers(ctx context.Context, peers string) error {
 	c := make(toml.Toml)
 	p2p := make(toml.Toml)
 
@@ -345,7 +341,8 @@ func (tn *ChainNode) SetPeers(ctx context.Context, peers string) error {
 	)
 }
 
-func (tn *ChainNode) CreateNodeContainer(ctx context.Context) error {
+// createNodeContainer initializes but does not start a container for the ChainNode with the specified configuration and context.
+func (tn *ChainNode) createNodeContainer(ctx context.Context) error {
 	chainCfg := tn.cfg.ChainConfig
 
 	var cmd []string
@@ -391,11 +388,11 @@ func (tn *ChainNode) CreateNodeContainer(ctx context.Context) error {
 		tn.log.Info("Port overrides", fields...)
 	}
 
-	return tn.containerLifecycle.CreateContainer(ctx, tn.TestName, tn.NetworkID, tn.Image, usingPorts, "", tn.Bind(), nil, tn.HostName(), cmd, chainCfg.Env, []string{})
+	return tn.containerLifecycle.CreateContainer(ctx, tn.TestName, tn.NetworkID, tn.Image, usingPorts, "", tn.bind(), nil, tn.HostName(), cmd, chainCfg.Env, []string{})
 }
 
-func (tn *ChainNode) OverwriteGenesisFile(ctx context.Context, content []byte) error {
-	err := tn.WriteFile(ctx, content, "config/genesis.json")
+func (tn *ChainNode) overwriteGenesisFile(ctx context.Context, content []byte) error {
+	err := tn.writeFile(ctx, content, "config/genesis.json")
 	if err != nil {
 		return fmt.Errorf("overwriting genesis.json: %w", err)
 	}
@@ -403,20 +400,20 @@ func (tn *ChainNode) OverwriteGenesisFile(ctx context.Context, content []byte) e
 	return nil
 }
 
-// CollectGentxs runs collect gentxs on the node's home folders.
-func (tn *ChainNode) CollectGentxs(ctx context.Context) error {
+// collectGentxs runs collect gentxs on the node's home folders.
+func (tn *ChainNode) collectGentxs(ctx context.Context) error {
 	tn.lock.Lock()
 	defer tn.lock.Unlock()
 
 	command := []string{tn.cfg.ChainConfig.Bin, "genesis", "collect-gentxs", "--home", tn.homeDir}
 
-	_, _, err := tn.Exec(ctx, tn.logger(), command, tn.cfg.ChainConfig.Env)
+	_, _, err := tn.exec(ctx, tn.logger(), command, tn.cfg.ChainConfig.Env)
 	return err
 }
 
-// ReadFile reads the contents of a single file at the specified path in the docker filesystem.
+// readFile reads the contents of a single file at the specified path in the docker filesystem.
 // relPath describes the location of the file in the docker volume relative to the home directory.
-func (tn *ChainNode) ReadFile(ctx context.Context, relPath string) ([]byte, error) {
+func (tn *ChainNode) readFile(ctx context.Context, relPath string) ([]byte, error) {
 	fr := file.NewRetriever(tn.logger(), tn.DockerClient, tn.TestName)
 	gen, err := fr.SingleFileContent(ctx, tn.VolumeName, relPath)
 	if err != nil {
@@ -425,16 +422,16 @@ func (tn *ChainNode) ReadFile(ctx context.Context, relPath string) ([]byte, erro
 	return gen, nil
 }
 
-// WriteFile accepts file contents in a byte slice and writes the contents to
+// writeFile accepts file contents in a byte slice and writes the contents to
 // the docker filesystem. relPath describes the location of the file in the
 // docker volume relative to the home directory.
-func (tn *ChainNode) WriteFile(ctx context.Context, content []byte, relPath string) error {
+func (tn *ChainNode) writeFile(ctx context.Context, content []byte, relPath string) error {
 	fw := file.NewWriter(tn.logger(), tn.DockerClient, tn.TestName)
 	return fw.WriteFile(ctx, tn.VolumeName, relPath, content)
 }
 
-func (tn *ChainNode) GenesisFileContent(ctx context.Context) ([]byte, error) {
-	gen, err := tn.ReadFile(ctx, "config/genesis.json")
+func (tn *ChainNode) genesisFileContent(ctx context.Context) ([]byte, error) {
+	gen, err := tn.readFile(ctx, "config/genesis.json")
 	if err != nil {
 		return nil, fmt.Errorf("getting genesis.json content: %w", err)
 	}
@@ -443,19 +440,19 @@ func (tn *ChainNode) GenesisFileContent(ctx context.Context) ([]byte, error) {
 }
 
 func (tn *ChainNode) copyGentx(ctx context.Context, destVal *ChainNode) error {
-	nid, err := tn.NodeID(ctx)
+	nid, err := tn.nodeID(ctx)
 	if err != nil {
 		return fmt.Errorf("getting node ID: %w", err)
 	}
 
 	relPath := fmt.Sprintf("config/gentx/gentx-%s.json", nid)
 
-	gentx, err := tn.ReadFile(ctx, relPath)
+	gentx, err := tn.readFile(ctx, relPath)
 	if err != nil {
 		return fmt.Errorf("getting gentx content: %w", err)
 	}
 
-	err = destVal.WriteFile(ctx, gentx, relPath)
+	err = destVal.writeFile(ctx, gentx, relPath)
 	if err != nil {
 		return fmt.Errorf("overwriting gentx: %w", err)
 	}
@@ -463,12 +460,12 @@ func (tn *ChainNode) copyGentx(ctx context.Context, destVal *ChainNode) error {
 	return nil
 }
 
-// NodeID returns the persistent ID of a given node.
-func (tn *ChainNode) NodeID(ctx context.Context) (string, error) {
+// nodeID returns the persistent ID of a given node.
+func (tn *ChainNode) nodeID(ctx context.Context) (string, error) {
 	// This used to call p2p.LoadNodeKey against the file on the host,
 	// but because we are transitioning to operating on Docker volumes,
 	// we only have to tmjson.Unmarshal the raw content.
-	j, err := tn.ReadFile(ctx, "config/node_key.json")
+	j, err := tn.readFile(ctx, "config/node_key.json")
 	if err != nil {
 		return "", fmt.Errorf("getting node_key.json content: %w", err)
 	}
@@ -481,8 +478,8 @@ func (tn *ChainNode) NodeID(ctx context.Context) (string, error) {
 	return string(nk.ID()), nil
 }
 
-// AddGenesisAccount adds a genesis account for each key.
-func (tn *ChainNode) AddGenesisAccount(ctx context.Context, address string, genesisAmount []sdk.Coin) error {
+// addGenesisAccount adds a genesis account for each key.
+func (tn *ChainNode) addGenesisAccount(ctx context.Context, address string, genesisAmount []sdk.Coin) error {
 	tn.lock.Lock()
 	defer tn.lock.Unlock()
 
@@ -500,36 +497,36 @@ func (tn *ChainNode) AddGenesisAccount(ctx context.Context, address string, gene
 	defer cancel()
 
 	command := []string{"genesis", "add-genesis-account", address, amount}
-	_, _, err := tn.ExecBin(ctx, command...)
+	_, _, err := tn.execBin(ctx, command...)
 
 	return err
 }
 
-// InitValidatorGenTx creates the node files and signs a genesis transaction.
-func (tn *ChainNode) InitValidatorGenTx(
+// initValidatorGenTx creates the node files and signs a genesis transaction.
+func (tn *ChainNode) initValidatorGenTx(
 	ctx context.Context,
 	genesisAmounts []sdk.Coin,
 	genesisSelfDelegation sdk.Coin,
 ) error {
-	if err := tn.CreateKey(ctx, valKey); err != nil {
+	if err := tn.createKey(ctx, valKey); err != nil {
 		return err
 	}
-	bech32, err := tn.AccountKeyBech32(ctx, valKey)
+	bech32, err := tn.accountKeyBech32(ctx, valKey)
 	if err != nil {
 		return err
 	}
-	if err := tn.AddGenesisAccount(ctx, bech32, genesisAmounts); err != nil {
+	if err := tn.addGenesisAccount(ctx, bech32, genesisAmounts); err != nil {
 		return err
 	}
-	return tn.Gentx(ctx, valKey, genesisSelfDelegation)
+	return tn.gentx(ctx, valKey, genesisSelfDelegation)
 }
 
-// CreateKey creates a key in the keyring backend test for the given node.
-func (tn *ChainNode) CreateKey(ctx context.Context, name string) error {
+// createKey creates a key in the keyring backend test for the given node.
+func (tn *ChainNode) createKey(ctx context.Context, name string) error {
 	tn.lock.Lock()
 	defer tn.lock.Unlock()
 
-	_, _, err := tn.ExecBin(ctx,
+	_, _, err := tn.execBin(ctx,
 		"keys", "add", name,
 		"--coin-type", tn.cfg.ChainConfig.CoinType,
 		"--keyring-backend", keyring.BackendTest,
@@ -538,7 +535,7 @@ func (tn *ChainNode) CreateKey(ctx context.Context, name string) error {
 }
 
 // Gentx generates the gentx for a given node.
-func (tn *ChainNode) Gentx(ctx context.Context, name string, genesisSelfDelegation sdk.Coin) error {
+func (tn *ChainNode) gentx(ctx context.Context, name string, genesisSelfDelegation sdk.Coin) error {
 	tn.lock.Lock()
 	defer tn.lock.Unlock()
 
@@ -549,18 +546,18 @@ func (tn *ChainNode) Gentx(ctx context.Context, name string, genesisSelfDelegati
 		"--chain-id", tn.cfg.ChainConfig.ChainID,
 	}
 
-	_, _, err := tn.ExecBin(ctx, command...)
+	_, _, err := tn.execBin(ctx, command...)
 	return err
 }
 
-// AccountKeyBech32 retrieves the named key's address in bech32 account format.
-func (tn *ChainNode) AccountKeyBech32(ctx context.Context, name string) (string, error) {
-	return tn.KeyBech32(ctx, name, "")
+// accountKeyBech32 retrieves the named key's address in bech32 account format.
+func (tn *ChainNode) accountKeyBech32(ctx context.Context, name string) (string, error) {
+	return tn.keyBech32(ctx, name, "")
 }
 
-// KeyBech32 retrieves the named key's address in bech32 format from the node.
+// keyBech32 retrieves the named key's address in bech32 format from the node.
 // bech is the bech32 prefix (acc|val|cons). If empty, defaults to the account key (same as "acc").
-func (tn *ChainNode) KeyBech32(ctx context.Context, name string, bech string) (string, error) {
+func (tn *ChainNode) keyBech32(ctx context.Context, name string, bech string) (string, error) {
 	command := []string{
 		tn.cfg.ChainConfig.Bin, "keys", "show", "--address", name,
 		"--home", tn.homeDir,
@@ -571,7 +568,7 @@ func (tn *ChainNode) KeyBech32(ctx context.Context, name string, bech string) (s
 		command = append(command, "--bech", bech)
 	}
 
-	stdout, stderr, err := tn.Exec(ctx, tn.logger(), command, tn.cfg.ChainConfig.Env)
+	stdout, stderr, err := tn.exec(ctx, tn.logger(), command, tn.cfg.ChainConfig.Env)
 	if err != nil {
 		return "", fmt.Errorf("failed to show key %q (stderr=%q): %w", name, stderr, err)
 	}

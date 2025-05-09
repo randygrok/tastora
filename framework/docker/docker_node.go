@@ -16,6 +16,7 @@ type node struct {
 	Image              DockerImage
 	containerLifecycle *ContainerLifecycle
 	homeDir            string
+	nodeType           string
 }
 
 // newNode creates a new node instance with the required parameters.
@@ -25,6 +26,7 @@ func newNode(
 	testName string,
 	image DockerImage,
 	homeDir string,
+	nodeType string,
 ) *node {
 	return &node{
 		NetworkID:    networkID,
@@ -32,15 +34,16 @@ func newNode(
 		TestName:     testName,
 		Image:        image,
 		homeDir:      homeDir,
+		nodeType:     nodeType,
 	}
 }
 
-// Exec runs a command in the node's container.
-func (n *node) Exec(ctx context.Context, logger *zap.Logger, cmd []string, env []string) ([]byte, []byte, error) {
+// exec runs a command in the node's container.
+func (n *node) exec(ctx context.Context, logger *zap.Logger, cmd []string, env []string) ([]byte, []byte, error) {
 	job := NewImage(logger, n.DockerClient, n.NetworkID, n.TestName, n.Image.Repository, n.Image.Version)
 	opts := ContainerOptions{
 		Env:   env,
-		Binds: n.Bind(),
+		Binds: n.bind(),
 	}
 	res := job.Run(ctx, cmd, opts)
 	if res.Err != nil {
@@ -49,7 +52,27 @@ func (n *node) Exec(ctx context.Context, logger *zap.Logger, cmd []string, env [
 	return res.Stdout, res.Stderr, res.Err
 }
 
-// Bind returns the home folder bind point for running the node.
-func (n *node) Bind() []string {
+// bind returns the home folder bind point for running the node.
+func (n *node) bind() []string {
 	return []string{fmt.Sprintf("%s:%s", n.VolumeName, n.homeDir)}
+}
+
+// GetType returns the node type as a string.
+func (n *node) GetType() string {
+	return n.nodeType
+}
+
+// Name of the test node container.
+func (n *node) Name() string {
+	return fmt.Sprintf("%s-%s", n.GetType(), SanitizeContainerName(n.TestName))
+}
+
+// HostName of the test node container.
+func (n *node) HostName() string {
+	return CondenseHostName(n.Name())
+}
+
+// RemoveContainer gracefully stops and removes the container associated with the node using the provided context.
+func (n *node) RemoveContainer(ctx context.Context) error {
+	return n.containerLifecycle.RemoveContainer(ctx)
 }

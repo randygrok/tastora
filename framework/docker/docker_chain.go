@@ -104,7 +104,7 @@ func (c *Chain) AddFullNodes(ctx context.Context, configFileOverrides map[string
 	}
 
 	// Get genesis.json
-	genbz, err := c.Validators[0].GenesisFileContent(ctx)
+	genbz, err := c.Validators[0].genesisFileContent(ctx)
 	if err != nil {
 		return err
 	}
@@ -119,13 +119,13 @@ func (c *Chain) AddFullNodes(ctx context.Context, configFileOverrides map[string
 	for i := prevCount; i < c.numFullNodes; i++ {
 		eg.Go(func() error {
 			fn := c.FullNodes[i]
-			if err := fn.InitFullNodeFiles(ctx); err != nil {
+			if err := fn.initFullNodeFiles(ctx); err != nil {
 				return err
 			}
-			if err := fn.SetPeers(ctx, peers); err != nil {
+			if err := fn.setPeers(ctx, peers); err != nil {
 				return err
 			}
-			if err := fn.OverwriteGenesisFile(ctx, genbz); err != nil {
+			if err := fn.overwriteGenesisFile(ctx, genbz); err != nil {
 				return err
 			}
 			for configFile, modifiedConfig := range configFileOverrides {
@@ -145,10 +145,10 @@ func (c *Chain) AddFullNodes(ctx context.Context, configFileOverrides map[string
 					return err
 				}
 			}
-			if err := fn.CreateNodeContainer(ctx); err != nil {
+			if err := fn.createNodeContainer(ctx); err != nil {
 				return err
 			}
-			return fn.StartContainer(ctx)
+			return fn.startContainer(ctx)
 		})
 	}
 	return eg.Wait()
@@ -198,7 +198,7 @@ func (c *Chain) Start(ctx context.Context) error {
 	for i, v := range c.Validators {
 		v.Validator = true
 		eg.Go(func() error {
-			if err := v.InitFullNodeFiles(ctx); err != nil {
+			if err := v.initFullNodeFiles(ctx); err != nil {
 				return err
 			}
 			for configFile, modifiedConfig := range configFileOverrides {
@@ -218,7 +218,7 @@ func (c *Chain) Start(ctx context.Context) error {
 					return fmt.Errorf("failed to modify toml config file: %w", err)
 				}
 			}
-			return v.InitValidatorGenTx(ctx, genesisAmounts[i], genesisSelfDelegation[i])
+			return v.initValidatorGenTx(ctx, genesisAmounts[i], genesisSelfDelegation[i])
 		})
 	}
 
@@ -226,7 +226,7 @@ func (c *Chain) Start(ctx context.Context) error {
 	for _, n := range c.FullNodes {
 		n.Validator = false
 		eg.Go(func() error {
-			if err := n.InitFullNodeFiles(ctx); err != nil {
+			if err := n.initFullNodeFiles(ctx); err != nil {
 				return err
 			}
 			for configFile, modifiedConfig := range configFileOverrides {
@@ -261,12 +261,12 @@ func (c *Chain) Start(ctx context.Context) error {
 	for i := 1; i < len(c.Validators); i++ {
 		validatorN := c.Validators[i]
 
-		bech32, err := validatorN.AccountKeyBech32(ctx, valKey)
+		bech32, err := validatorN.accountKeyBech32(ctx, valKey)
 		if err != nil {
 			return err
 		}
 
-		if err := validator0.AddGenesisAccount(ctx, bech32, genesisAmounts[0]); err != nil {
+		if err := validator0.addGenesisAccount(ctx, bech32, genesisAmounts[0]); err != nil {
 			return err
 		}
 
@@ -275,11 +275,11 @@ func (c *Chain) Start(ctx context.Context) error {
 		}
 	}
 
-	if err := validator0.CollectGentxs(ctx); err != nil {
+	if err := validator0.collectGentxs(ctx); err != nil {
 		return err
 	}
 
-	genbz, err := validator0.GenesisFileContent(ctx)
+	genbz, err := validator0.genesisFileContent(ctx)
 	if err != nil {
 		return err
 	}
@@ -296,7 +296,7 @@ func (c *Chain) Start(ctx context.Context) error {
 	chainNodes := c.Nodes()
 
 	for _, cn := range chainNodes {
-		if err := cn.OverwriteGenesisFile(ctx, genbz); err != nil {
+		if err := cn.overwriteGenesisFile(ctx, genbz); err != nil {
 			return err
 		}
 	}
@@ -304,7 +304,7 @@ func (c *Chain) Start(ctx context.Context) error {
 	eg, egCtx := errgroup.WithContext(ctx)
 	for _, n := range chainNodes {
 		eg.Go(func() error {
-			return n.CreateNodeContainer(egCtx)
+			return n.createNodeContainer(egCtx)
 		})
 	}
 	if err := eg.Wait(); err != nil {
@@ -325,10 +325,10 @@ func (c *Chain) Start(ctx context.Context) error {
 	for _, n := range chainNodes {
 		c.log.Info("Starting container", zap.String("container", n.Name()), zap.String("peers", peers))
 		eg.Go(func() error {
-			if err := n.SetPeers(egCtx, peers); err != nil {
+			if err := n.setPeers(egCtx, peers); err != nil {
 				return err
 			}
-			return n.StartContainer(egCtx)
+			return n.startContainer(egCtx)
 		})
 	}
 	if err := eg.Wait(); err != nil {

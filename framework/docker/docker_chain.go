@@ -15,6 +15,7 @@ import (
 	cryptocodec "github.com/cosmos/cosmos-sdk/crypto/codec"
 	"github.com/cosmos/cosmos-sdk/crypto/keyring"
 	sdk "github.com/cosmos/cosmos-sdk/types"
+	sdktypes "github.com/cosmos/cosmos-sdk/types"
 	dockerimagetypes "github.com/docker/docker/api/types/image"
 	volumetypes "github.com/docker/docker/api/types/volume"
 	"github.com/docker/go-connections/nat"
@@ -275,6 +276,16 @@ func (c *Chain) Start(ctx context.Context) error {
 		}
 	}
 
+	// create the faucet wallet, this can be used to fund new wallets in the tests.
+	wallet, err := c.CreateWallet(ctx, consts.FaucetAccountKeyName)
+	if err != nil {
+		return fmt.Errorf("failed to create faucet wallet: %w", err)
+	}
+
+	if err := validator0.addGenesisAccount(ctx, wallet.FormattedAddress, []sdk.Coin{{Denom: c.cfg.ChainConfig.Denom, Amount: sdkmath.NewInt(10_000_000_000_000)}}); err != nil {
+		return err
+	}
+
 	if err := validator0.collectGentxs(ctx); err != nil {
 		return err
 	}
@@ -464,4 +475,32 @@ func (c *Chain) pullImages(ctx context.Context) {
 			_ = rc.Close()
 		}
 	}
+}
+
+// CreateWallet will creates a new wallet.
+func (c *Chain) CreateWallet(ctx context.Context, keyName string) (types.Wallet, error) {
+	if err := c.createKey(ctx, keyName); err != nil {
+		return types.Wallet{}, fmt.Errorf("failed to create key with name %q on chain %s: %w", keyName, c.cfg.ChainConfig.Name, err)
+	}
+
+	addrBytes, err := c.getAddress(ctx, keyName)
+	if err != nil {
+		return types.Wallet{}, fmt.Errorf("failed to get account address for key %q on chain %s: %w", keyName, c.cfg.ChainConfig.Name, err)
+	}
+
+	formattedAddres := sdktypes.MustBech32ifyAddressBytes(c.cfg.ChainConfig.Bech32Prefix, addrBytes)
+
+	return types.NewWallet(addrBytes, formattedAddres, keyName), nil
+}
+
+func (c *Chain) createKey(ctx context.Context, keyName string) error {
+	return c.GetNode().createKey(ctx, keyName)
+}
+
+func (c *Chain) getAddress(ctx context.Context, keyName string) ([]byte, error) {
+	b32Addr, err := c.GetNode().accountKeyBech32(ctx, keyName)
+	if err != nil {
+		return nil, err
+	}
+	return sdk.GetFromBech32(b32Addr, c.cfg.ChainConfig.Bech32Prefix)
 }

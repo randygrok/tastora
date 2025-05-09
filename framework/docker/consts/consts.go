@@ -10,4 +10,6 @@ const (
 	NodeOwnerLabel = LabelPrefix + "node-owner"
 	// UserRootString defines the default root user and group identifier in the format "UID:GID".
 	UserRootString = "0:0"
+	// FaucetAccountKeyName defines the default key name used for the faucet account.
+	FaucetAccountKeyName = "faucet"
 )

@@ -5,6 +5,7 @@ import (
 	"context"
 	sdkmath "cosmossdk.io/math"
 	"fmt"
+	"github.com/chatton/celestia-test/framework/docker/consts"
 	addressutil "github.com/chatton/celestia-test/framework/testutil/address"
 	"github.com/chatton/celestia-test/framework/testutil/toml"
 	"github.com/chatton/celestia-test/framework/testutil/wait"
@@ -419,8 +420,8 @@ func (c *Chain) newChainNode(
 
 	v, err := c.cfg.DockerClient.VolumeCreate(ctx, volumetypes.CreateOptions{
 		Labels: map[string]string{
-			CleanupLabel:   testName,
-			NodeOwnerLabel: tn.Name(),
+			consts.CleanupLabel:   testName,
+			consts.NodeOwnerLabel: tn.Name(),
 		},
 	})
 	if err != nil {

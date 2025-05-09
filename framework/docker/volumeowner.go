@@ -3,6 +3,7 @@ package docker
 import (
 	"context"
 	"fmt"
+	"github.com/chatton/celestia-test/framework/docker/consts"
 	dockerinternal "github.com/chatton/celestia-test/framework/docker/internal"
 	"github.com/chatton/celestia-test/framework/testutil/random"
 	"time"
@@ -28,12 +29,12 @@ type VolumeOwnerOptions struct {
 func SetVolumeOwner(ctx context.Context, opts VolumeOwnerOptions) error {
 	owner := opts.UidGid
 	if owner == "" {
-		owner = GetRootUserString()
+		owner = consts.UserRootString
 	}
 
 	// Start a one-off container to chmod and chown the volume.
 
-	containerName := fmt.Sprintf("%s-volumeowner-%d-%s", CelestiaDockerPrefix, time.Now().UnixNano(), random.LowerCaseLetterString(5))
+	containerName := fmt.Sprintf("%s-volumeowner-%d-%s", consts.CelestiaDockerPrefix, time.Now().UnixNano(), random.LowerCaseLetterString(5))
 
 	if err := dockerinternal.EnsureBusybox(ctx, opts.Client); err != nil {
 		return err
@@ -52,8 +53,8 @@ func SetVolumeOwner(ctx context.Context, opts VolumeOwnerOptions) error {
 				owner,
 			},
 			// Root user so we have permissions to set ownership and mode.
-			User:   GetRootUserString(),
-			Labels: map[string]string{CleanupLabel: opts.TestName},
+			User:   consts.UserRootString,
+			Labels: map[string]string{consts.CleanupLabel: opts.TestName},
 		},
 		&container.HostConfig{
 			Binds:      []string{opts.VolumeName + ":" + mountPath},

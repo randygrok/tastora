@@ -3,6 +3,7 @@ package docker
 import (
 	"context"
 	"fmt"
+	"github.com/chatton/celestia-test/framework/docker/consts"
 	"github.com/chatton/celestia-test/framework/testutil/toml"
 	"github.com/chatton/celestia-test/framework/types"
 	volumetypes "github.com/docker/docker/api/types/volume"
@@ -43,8 +44,8 @@ func newBridgeNode(ctx context.Context, testName string, cfg Config) (types.Node
 
 	v, err := cfg.DockerClient.VolumeCreate(ctx, volumetypes.CreateOptions{
 		Labels: map[string]string{
-			CleanupLabel:   testName,
-			NodeOwnerLabel: bn.Name(),
+			consts.CleanupLabel:   testName,
+			consts.NodeOwnerLabel: bn.Name(),
 		},
 	})
 	if err != nil {

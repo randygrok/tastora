@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/chatton/celestia-test/framework/docker/consts"
 	"github.com/chatton/celestia-test/framework/testutil/random"
 	"io"
 	"strconv"
@@ -178,7 +179,7 @@ func (image *Image) CreateContainer(ctx context.Context, containerName, hostName
 			Hostname: hostName,
 			User:     opts.User,
 
-			Labels: map[string]string{CleanupLabel: image.testName},
+			Labels: map[string]string{consts.CleanupLabel: image.testName},
 		},
 		&container.HostConfig{
 			Binds:           opts.Binds,

@@ -1,9 +1,10 @@
-package docker
+package file
 
 import (
 	"archive/tar"
 	"context"
 	"fmt"
+	"github.com/chatton/celestia-test/framework/docker/consts"
 	internaldocker "github.com/chatton/celestia-test/framework/docker/internal"
 	"github.com/chatton/celestia-test/framework/testutil/random"
 	"io"
@@ -15,38 +16,36 @@ import (
 	"go.uber.org/zap"
 )
 
-// FileRetriever allows retrieving a single file from a Docker volume.
-type FileRetriever struct {
+// Retriever allows retrieving a single file from a Docker volume.
+type Retriever struct {
 	log      *zap.Logger
 	cli      *client.Client
 	testName string
 }
 
-// NewFileRetriever returns a new FileRetriever.
-func NewFileRetriever(log *zap.Logger, cli *client.Client, testName string) *FileRetriever {
-	return &FileRetriever{log: log, cli: cli, testName: testName}
+// NewRetriever returns a new Retriever.
+func NewRetriever(log *zap.Logger, cli *client.Client, testName string) *Retriever {
+	return &Retriever{log: log, cli: cli, testName: testName}
 }
 
 // SingleFileContent returns the content of the file named at relPath,
 // inside the volume specified by volumeName.
-func (r *FileRetriever) SingleFileContent(ctx context.Context, volumeName, relPath string) ([]byte, error) {
+func (r *Retriever) SingleFileContent(ctx context.Context, volumeName, relPath string) ([]byte, error) {
 	const mountPath = "/mnt/dockervolume"
 
 	if err := internaldocker.EnsureBusybox(ctx, r.cli); err != nil {
 		return nil, err
 	}
 
-	containerName := fmt.Sprintf("%s-getfile-%d-%s", CelestiaDockerPrefix, time.Now().UnixNano(), random.LowerCaseLetterString(5))
+	containerName := fmt.Sprintf("%s-getfile-%d-%s", consts.CelestiaDockerPrefix, time.Now().UnixNano(), random.LowerCaseLetterString(5))
 
 	cc, err := r.cli.ContainerCreate(
 		ctx,
 		&container.Config{
 			Image: internaldocker.BusyboxRef,
-
 			// Use root user to avoid permission issues when reading files from the volume.
-			User: GetRootUserString(),
-
-			Labels: map[string]string{CleanupLabel: r.testName},
+			User:   consts.UserRootString,
+			Labels: map[string]string{consts.CleanupLabel: r.testName},
 		},
 		&container.HostConfig{
 			Binds:      []string{volumeName + ":" + mountPath},

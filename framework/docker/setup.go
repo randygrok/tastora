@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/chatton/celestia-test/framework/docker/consts"
 	"github.com/chatton/celestia-test/framework/testutil/random"
 	"math/rand"
 	"net"
@@ -30,21 +31,6 @@ type DockerSetupTestingT interface {
 
 	Logf(format string, args ...any)
 }
-
-// CleanupLabel is a docker label key targeted by DockerSetup when it cleans up docker resources.
-const CleanupLabel = "celestia-test"
-
-// CleanupLabel is the "old" format.
-// Note that any new labels should follow the reverse DNS format suggested at
-// https://docs.docker.com/config/labels-custom-metadata/#key-format-recommendations.
-
-const (
-	// LabelPrefix is the reverse DNS format "namespace" for celestia test Docker labels.
-	LabelPrefix = "org.celestia.celestia-test."
-
-	// NodeOwnerLabel indicates the logical node owning a particular object (probably a volume).
-	NodeOwnerLabel = LabelPrefix + "node-owner"
-)
 
 // KeepVolumesOnFailure determines whether volumes associated with a test
 // using DockerSetup are retained or deleted following a test failure.
@@ -74,7 +60,7 @@ func DockerSetup(t DockerSetupTestingT) (*client.Client, string) {
 	// e.g. if the test was interrupted.
 	DockerCleanup(t, cli)()
 
-	name := fmt.Sprintf("%s-%s", CelestiaDockerPrefix, random.LowerCaseLetterString(8))
+	name := fmt.Sprintf("%s-%s", consts.CelestiaDockerPrefix, random.LowerCaseLetterString(8))
 	octet := uint8(rand.Intn(256))
 	baseSubnet := fmt.Sprintf("172.%d.0.0/16", octet)
 	usedSubnets, err := getUsedSubnets(cli)
@@ -95,7 +81,7 @@ func DockerSetup(t DockerSetupTestingT) (*client.Client, string) {
 			},
 		},
 
-		Labels: map[string]string{CleanupLabel: t.Name()},
+		Labels: map[string]string{consts.CleanupLabel: t.Name()},
 	})
 	if err != nil {
 		panic(fmt.Errorf("failed to create docker network: %v", err))
@@ -187,7 +173,7 @@ func DockerCleanup(t DockerSetupTestingT, cli *client.Client) func() {
 		cs, err := cli.ContainerList(ctx, container.ListOptions{
 			All: true,
 			Filters: filters.NewArgs(
-				filters.Arg("label", CleanupLabel+"="+t.Name()),
+				filters.Arg("label", consts.CleanupLabel+"="+t.Name()),
 			),
 		})
 		if err != nil {
@@ -265,7 +251,7 @@ func PruneVolumesWithRetry(ctx context.Context, t DockerSetupTestingT, cli *clie
 	var msg string
 	err := retry.Do(
 		func() error {
-			res, err := cli.VolumesPrune(ctx, filters.NewArgs(filters.Arg("label", CleanupLabel+"="+t.Name())))
+			res, err := cli.VolumesPrune(ctx, filters.NewArgs(filters.Arg("label", consts.CleanupLabel+"="+t.Name())))
 			if err != nil {
 				if errdefs.IsConflict(err) {
 					// Prune is already in progress; try again.
@@ -301,7 +287,7 @@ func PruneNetworksWithRetry(ctx context.Context, t DockerSetupTestingT, cli *cli
 	var deleted []string
 	err := retry.Do(
 		func() error {
-			res, err := cli.NetworksPrune(ctx, filters.NewArgs(filters.Arg("label", CleanupLabel+"="+t.Name())))
+			res, err := cli.NetworksPrune(ctx, filters.NewArgs(filters.Arg("label", consts.CleanupLabel+"="+t.Name())))
 			if err != nil {
 				if errdefs.IsConflict(err) {
 					// Prune is already in progress; try again.

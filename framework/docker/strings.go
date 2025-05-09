@@ -7,10 +7,6 @@ import (
 	"regexp"
 )
 
-const (
-	CelestiaDockerPrefix = "celestia-test"
-)
-
 // GetHostPort returns a resource's published port with an address.
 // cont is the type returned by the Docker client's ContainerInspect method.
 func GetHostPort(cont types.ContainerJSON, portID string) string {
@@ -24,10 +20,6 @@ func GetHostPort(cont types.ContainerJSON, portID string) string {
 	}
 
 	return net.JoinHostPort(m[0].HostIP, m[0].HostPort)
-}
-
-func GetRootUserString() string {
-	return "0:0"
 }
 
 // CondenseHostName truncates the middle of the given name

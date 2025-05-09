@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/BurntSushi/toml"
+	"github.com/chatton/celestia-test/framework/docker/file"
 	tomlutil "github.com/chatton/celestia-test/framework/testutil/toml"
 	"github.com/moby/moby/client"
 	"go.uber.org/zap"
@@ -20,7 +21,7 @@ func ModifyConfigFile(
 	filePath string,
 	modifications tomlutil.Toml,
 ) error {
-	fr := NewFileRetriever(logger, dockerClient, testName)
+	fr := file.NewRetriever(logger, dockerClient, testName)
 	config, err := fr.SingleFileContent(ctx, volumeName, filePath)
 	if err != nil {
 		return fmt.Errorf("failed to retrieve %s: %w", filePath, err)
@@ -40,7 +41,7 @@ func ModifyConfigFile(
 		return fmt.Errorf("failed to encode %s: %w", filePath, err)
 	}
 
-	fw := NewFileWriter(logger, dockerClient, testName)
+	fw := file.NewWriter(logger, dockerClient, testName)
 	if err := fw.WriteFile(ctx, volumeName, filePath, buf.Bytes()); err != nil {
 		return fmt.Errorf("overwriting %s: %w", filePath, err)
 	}

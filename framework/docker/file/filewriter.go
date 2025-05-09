@@ -1,10 +1,11 @@
-package docker
+package file
 
 import (
 	"archive/tar"
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/chatton/celestia-test/framework/docker/consts"
 	internaldocker "github.com/chatton/celestia-test/framework/docker/internal"
 	"github.com/chatton/celestia-test/framework/testutil/random"
 	"time"
@@ -14,36 +15,33 @@ import (
 	"go.uber.org/zap"
 )
 
-// FileWriter allows retrieving a single file from a Docker volume.
+// Writer allows retrieving a single file from a Docker volume.
 // In the future it may allow retrieving an entire directory.
-type FileWriter struct {
-	log *zap.Logger
-
-	cli *client.Client
-
+type Writer struct {
+	log      *zap.Logger
+	cli      *client.Client
 	testName string
 }
 
-// NewFileWriter returns a new FileWriter.
-func NewFileWriter(log *zap.Logger, cli *client.Client, testName string) *FileWriter {
-	return &FileWriter{log: log, cli: cli, testName: testName}
+// NewWriter returns a new Writer.
+func NewWriter(log *zap.Logger, cli *client.Client, testName string) *Writer {
+	return &Writer{log: log, cli: cli, testName: testName}
 }
 
 // WriteFile writes the single file containing content, at relPath within the given volume.
-func (w *FileWriter) WriteFile(ctx context.Context, volumeName, relPath string, content []byte) error {
+func (w *Writer) WriteFile(ctx context.Context, volumeName, relPath string, content []byte) error {
 	const mountPath = "/mnt/dockervolume"
 
 	if err := internaldocker.EnsureBusybox(ctx, w.cli); err != nil {
 		return err
 	}
 
-	containerName := fmt.Sprintf("%s-writefile-%d-%s", CelestiaDockerPrefix, time.Now().UnixNano(), random.LowerCaseLetterString(5))
+	containerName := fmt.Sprintf("%s-writefile-%d-%s", consts.CelestiaDockerPrefix, time.Now().UnixNano(), random.LowerCaseLetterString(5))
 
 	cc, err := w.cli.ContainerCreate(
 		ctx,
 		&container.Config{
-			Image: internaldocker.BusyboxRef,
-
+			Image:      internaldocker.BusyboxRef,
 			Entrypoint: []string{"sh", "-c"},
 			Cmd: []string{
 				// Take the uid and gid of the mount path,
@@ -53,11 +51,9 @@ func (w *FileWriter) WriteFile(ctx context.Context, volumeName, relPath string, 
 				mountPath,
 				mountPath,
 			},
-
 			// Use root user to avoid permission issues when reading files from the volume.
-			User: GetRootUserString(),
-
-			Labels: map[string]string{CleanupLabel: w.testName},
+			User:   consts.UserRootString,
+			Labels: map[string]string{consts.CleanupLabel: w.testName},
 		},
 		&container.HostConfig{
 			Binds:      []string{volumeName + ":" + mountPath},

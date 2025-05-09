@@ -3,6 +3,7 @@ package docker
 import (
 	"context"
 	"fmt"
+	"github.com/chatton/celestia-test/framework/docker/consts"
 	"io"
 	"net"
 	"regexp"
@@ -91,14 +92,11 @@ func (c *ContainerLifecycle) CreateContainer(
 		&container.Config{
 			Image: imageRef,
 
-			Entrypoint: entrypoint,
-			Cmd:        cmd,
-			Env:        env,
-
-			Hostname: hostName,
-
-			Labels: map[string]string{CleanupLabel: testName},
-
+			Entrypoint:   entrypoint,
+			Cmd:          cmd,
+			Env:          env,
+			Hostname:     hostName,
+			Labels:       map[string]string{consts.CleanupLabel: testName},
 			ExposedPorts: pS,
 		},
 		&container.HostConfig{

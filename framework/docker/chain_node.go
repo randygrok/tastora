@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/avast/retry-go/v4"
+	"github.com/chatton/celestia-test/framework/docker/file"
 	"github.com/chatton/celestia-test/framework/testutil/toml"
 	"github.com/chatton/celestia-test/framework/types"
 	tmjson "github.com/cometbft/cometbft/libs/json"
@@ -403,7 +404,7 @@ func (tn *ChainNode) CollectGentxs(ctx context.Context) error {
 // ReadFile reads the contents of a single file at the specified path in the docker filesystem.
 // relPath describes the location of the file in the docker volume relative to the home directory.
 func (tn *ChainNode) ReadFile(ctx context.Context, relPath string) ([]byte, error) {
-	fr := NewFileRetriever(tn.logger(), tn.DockerClient, tn.TestName)
+	fr := file.NewRetriever(tn.logger(), tn.DockerClient, tn.TestName)
 	gen, err := fr.SingleFileContent(ctx, tn.VolumeName, relPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read file at %s: %w", relPath, err)
@@ -415,7 +416,7 @@ func (tn *ChainNode) ReadFile(ctx context.Context, relPath string) ([]byte, erro
 // the docker filesystem. relPath describes the location of the file in the
 // docker volume relative to the home directory.
 func (tn *ChainNode) WriteFile(ctx context.Context, content []byte, relPath string) error {
-	fw := NewFileWriter(tn.logger(), tn.DockerClient, tn.TestName)
+	fw := file.NewWriter(tn.logger(), tn.DockerClient, tn.TestName)
 	return fw.WriteFile(ctx, tn.VolumeName, relPath, content)
 }
 

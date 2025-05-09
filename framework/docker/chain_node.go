@@ -68,7 +68,7 @@ type ChainNode struct {
 	lock sync.Mutex
 	log  *zap.Logger
 
-	// Ports set during StartContainer.
+	// Ports set during startContainer.
 	hostRPCPort  string
 	hostAPIPort  string
 	hostGRPCPort string

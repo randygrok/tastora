@@ -51,12 +51,19 @@ type Broadcaster struct {
 
 // NewBroadcaster returns a instance of Broadcaster which can be used with broadcast.Tx to
 // broadcast messages sdk messages.
-func NewBroadcaster(t *testing.T, chain *Chain) *Broadcaster {
+func NewBroadcaster(t *testing.T, chain types.Chain) *Broadcaster {
 	t.Helper()
+
+	// TODO: the existing broadcaster implementation assumes a docker chain.
+	// if other backends get added, this will need to be addressed.
+	dockerChain, ok := chain.(*Chain)
+	if !ok {
+		t.Fatalf("chain must be of type *Chain, got %T", chain)
+	}
 
 	return &Broadcaster{
 		t:        t,
-		chain:    chain,
+		chain:    dockerChain,
 		buf:      &bytes.Buffer{},
 		keyrings: map[User]keyring.Keyring{},
 	}
@@ -169,7 +176,7 @@ func (b *Broadcaster) defaultClientContext(fromUser User, sdkAdd sdk.AccAddress)
 		WithFromAddress(sdkAdd).
 		WithFromName(fromUser.KeyName()).
 		WithSkipConfirmation(true).
-		WithAccountRetriever(AccountRetriever{chain: b.chain}).
+		WithAccountRetriever(AccountRetriever{chain: b.chain, prefix: b.chain.cfg.ChainConfig.Bech32Prefix}).
 		WithKeyring(kr).
 		WithBroadcastMode(flags.BroadcastSync).
 		WithCodec(b.chain.cfg.ChainConfig.EncodingConfig.Codec)
@@ -188,7 +195,7 @@ func (b *Broadcaster) defaultTxFactory(clientCtx client.Context, account client.
 		WithGasAdjustment(chainConfig.GasAdjustment).
 		WithGas(flags.DefaultGasLimit).
 		WithGasPrices(chainConfig.GasPrices).
-		WithMemo("interchaintest").
+		WithMemo("celestia-test").
 		WithTxConfig(clientCtx.TxConfig).
 		WithAccountRetriever(clientCtx.AccountRetriever).
 		WithKeybase(clientCtx.Keyring).
@@ -273,6 +280,6 @@ func accAddressFromBech32(address, prefix string) (addr sdk.AccAddress, err erro
 	return bz, nil
 }
 
-func (c *Chain) AccAddressToBech32(addr sdk.AccAddress, prefix string) (string, error) {
+func accAddressToBech32(addr sdk.AccAddress, prefix string) (string, error) {
 	return bech32.ConvertAndEncode(prefix, addr)
 }

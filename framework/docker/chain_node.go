@@ -12,6 +12,7 @@ import (
 	rpcclient "github.com/cometbft/cometbft/rpc/client"
 	rpchttp "github.com/cometbft/cometbft/rpc/client/http"
 	libclient "github.com/cometbft/cometbft/rpc/jsonrpc/client"
+	"github.com/cosmos/cosmos-sdk/client"
 	"github.com/cosmos/cosmos-sdk/crypto/keyring"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	stakingtypes "github.com/cosmos/cosmos-sdk/x/staking/types"
@@ -20,6 +21,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"hash/fnv"
+	"os"
 	"path"
 	"strconv"
 	"sync"
@@ -553,6 +555,22 @@ func (tn *ChainNode) gentx(ctx context.Context, name string, genesisSelfDelegati
 // accountKeyBech32 retrieves the named key's address in bech32 account format.
 func (tn *ChainNode) accountKeyBech32(ctx context.Context, name string) (string, error) {
 	return tn.keyBech32(ctx, name, "")
+}
+
+// CliContext creates a new Cosmos SDK client context.
+func (tn *ChainNode) CliContext() client.Context {
+	cfg := tn.cfg.ChainConfig
+	return client.Context{
+		Client:            tn.Client,
+		GRPCClient:        tn.GrpcConn,
+		ChainID:           cfg.ChainID,
+		InterfaceRegistry: cfg.EncodingConfig.InterfaceRegistry,
+		Input:             os.Stdin,
+		Output:            os.Stdout,
+		OutputFormat:      "json",
+		LegacyAmino:       cfg.EncodingConfig.Amino,
+		TxConfig:          cfg.EncodingConfig.TxConfig,
+	}
 }
 
 // keyBech32 retrieves the named key's address in bech32 format from the node.

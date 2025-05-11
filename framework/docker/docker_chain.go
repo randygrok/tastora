@@ -89,7 +89,7 @@ type Chain struct {
 	log          *zap.Logger
 	keyring      keyring.Keyring
 	findTxMu     sync.Mutex
-	faucetWallet *types.Wallet
+	faucetWallet types.Wallet
 }
 
 func (c *Chain) AddNode(ctx context.Context, overrides map[string]any) error {

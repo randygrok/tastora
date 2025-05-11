@@ -26,19 +26,25 @@ func GetAndFundTestWallet(
 		return types.Wallet{}, fmt.Errorf("failed to get source user wallet: %w", err)
 	}
 
-	broadcaster := NewBroadcaster(t, chain)
-
-	fromAddr := sdk.AccAddress(chain.faucetWallet.FormattedAddress)
-	toAddr := sdk.AccAddress(wallet.FormattedAddress)
-
-	bankSend := banktypes.NewMsgSend(fromAddr, toAddr, sdk.NewCoins(sdk.NewCoin(chainCfg.Denom, amount)))
-	resp, err := BroadcastTx(ctx, broadcaster, chain.faucetWallet, bankSend)
+	fromAddr, err := accAddressFromBech32(chain.faucetWallet.FormattedAddress, chainCfg.Bech32Prefix)
 	if err != nil {
-		return types.Wallet{}, fmt.Errorf("failed to get faucet user wallet: %w", err)
+		return types.Wallet{}, fmt.Errorf("invalid from address: %w", err)
+	}
+
+	toAddr, err := accAddressFromBech32(wallet.FormattedAddress, chainCfg.Bech32Prefix)
+	if err != nil {
+		return types.Wallet{}, fmt.Errorf("invalid to address: %w", err)
+	}
+
+	broadcaster := NewBroadcaster(t, chain)
+	bankSend := banktypes.NewMsgSend(fromAddr, toAddr, sdk.NewCoins(sdk.NewCoin(chainCfg.Denom, amount)))
+	resp, err := BroadcastTx(ctx, broadcaster, &chain.faucetWallet, bankSend)
+	if err != nil {
+		return types.Wallet{}, fmt.Errorf("failed to broadcast transaction: %w", err)
 	}
 
 	if resp.Code != 0 {
-		return types.Wallet{}, fmt.Errorf("failed to broadcast bank send: %s", resp.RawLog)
+		return types.Wallet{}, fmt.Errorf("error in bank send response: %s", resp.RawLog)
 	}
 
 	return wallet, nil

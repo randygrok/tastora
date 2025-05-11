@@ -241,6 +241,7 @@ func BroadcastTx(ctx context.Context, broadcaster *Broadcaster, broadcastingWall
 	if err != nil {
 		return sdk.TxResponse{}, err
 	}
+	broadcaster.t.Logf("broadcasted tx hash: %s", respWithTxHash.TxHash)
 
 	return getFullyPopulatedResponse(ctx, cc, respWithTxHash.TxHash)
 }

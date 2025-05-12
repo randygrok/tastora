@@ -78,6 +78,11 @@ type BridgeNode struct {
 	hostP2PPort string
 }
 
+// GetHostRPCAddress returns the externally resolvable RPC address of the bridge node.
+func (b *BridgeNode) GetHostRPCAddress() string {
+	return b.hostRPCPort
+}
+
 // Stop terminates the BridgeNode by removing its associated container gracefully using the provided context.
 func (b *BridgeNode) Stop(ctx context.Context) error {
 	return b.RemoveContainer(ctx)

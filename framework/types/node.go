@@ -15,4 +15,6 @@ type Node interface {
 	GetType() string
 	// GetHeader returns a header at a specified height.
 	GetHeader(ctx context.Context, height uint64) (Header, error)
+	// GetHostRPCAddress returns the externally resolvable RPC address of the node.
+	GetHostRPCAddress() string
 }

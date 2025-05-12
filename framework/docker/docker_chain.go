@@ -23,6 +23,7 @@ import (
 	"golang.org/x/sync/errgroup"
 	"io"
 	"sync"
+	"testing"
 )
 
 var _ types.Chain = &Chain{}
@@ -40,7 +41,7 @@ var sentryPorts = nat.PortMap{
 	nat.Port(privValPort): {},
 }
 
-func newChain(ctx context.Context, testName string, cfg Config) (types.Chain, error) {
+func newChain(ctx context.Context, t *testing.T, cfg Config) (types.Chain, error) {
 	if cfg.ChainConfig == nil {
 		return nil, fmt.Errorf("chain config must be set")
 	}
@@ -64,15 +65,15 @@ func newChain(ctx context.Context, testName string, cfg Config) (types.Chain, er
 	}
 
 	c := &Chain{
-		testName: testName,
-		cfg:      cfg,
-		cdc:      cdc,
-		keyring:  kr,
-		log:      cfg.Logger,
+		t:       t,
+		cfg:     cfg,
+		cdc:     cdc,
+		keyring: kr,
+		log:     cfg.Logger,
 	}
 
 	// create the underlying docker resources for the chain.
-	if err := c.initializeChainNodes(ctx, testName); err != nil {
+	if err := c.initializeChainNodes(ctx, c.t.Name()); err != nil {
 		return nil, err
 	}
 
@@ -80,7 +81,7 @@ func newChain(ctx context.Context, testName string, cfg Config) (types.Chain, er
 }
 
 type Chain struct {
-	testName     string
+	t            *testing.T
 	cfg          Config
 	Validators   ChainNodes
 	FullNodes    ChainNodes
@@ -90,6 +91,21 @@ type Chain struct {
 	keyring      keyring.Keyring
 	findTxMu     sync.Mutex
 	faucetWallet types.Wallet
+	broadcaster  *Broadcaster
+}
+
+// BroadcastMessages uses the faucet wallet to send the given messages to the chain.
+// this function can be used when it doesn't matter which wallet signs the transactions.
+func (c *Chain) BroadcastMessages(ctx context.Context, msgs ...sdktypes.Msg) (sdktypes.TxResponse, error) {
+	if c.faucetWallet.FormattedAddress == "" {
+		return sdktypes.TxResponse{}, fmt.Errorf("faucet wallet not initialized")
+	}
+	
+	if c.broadcaster == nil {
+		c.broadcaster = NewBroadcaster(c.t, c)
+	}
+
+	return BroadcastTx(ctx, c.broadcaster, &c.faucetWallet, msgs...)
 }
 
 func (c *Chain) AddNode(ctx context.Context, overrides map[string]any) error {
@@ -113,7 +129,7 @@ func (c *Chain) AddFullNodes(ctx context.Context, configFileOverrides map[string
 
 	prevCount := c.numFullNodes
 	c.numFullNodes += inc
-	if err := c.initializeChainNodes(ctx, c.testName); err != nil {
+	if err := c.initializeChainNodes(ctx, c.t.Name()); err != nil {
 		return err
 	}
 

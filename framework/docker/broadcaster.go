@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/celestiaorg/go-square/v2/share"
+	squaretx "github.com/celestiaorg/go-square/v2/tx"
 	dockerinternal "github.com/chatton/celestia-test/framework/docker/internal"
 	"github.com/chatton/celestia-test/framework/testutil/wait"
 	"github.com/chatton/celestia-test/framework/types"
+	sdktx "github.com/cosmos/cosmos-sdk/client/tx"
 	"github.com/cosmos/cosmos-sdk/types/bech32"
 	"path"
 	"strings"
@@ -90,7 +93,7 @@ func (b *Broadcaster) GetFactory(ctx context.Context, wallet Wallet) (tx.Factory
 		return tx.Factory{}, err
 	}
 
-	sdkAdd, err := accAddressFromBech32(wallet.GetFormattedAddress(), b.chain.cfg.ChainConfig.Bech32Prefix)
+	sdkAdd, err := AccAddressFromBech32(wallet.GetFormattedAddress(), b.chain.cfg.ChainConfig.Bech32Prefix)
 	if err != nil {
 		return tx.Factory{}, err
 	}
@@ -125,7 +128,7 @@ func (b *Broadcaster) GetClientContext(ctx context.Context, wallet Wallet) (clie
 		b.keyrings[wallet] = kr
 	}
 
-	sdkAdd, err := accAddressFromBech32(wallet.GetFormattedAddress(), b.chain.cfg.ChainConfig.Bech32Prefix)
+	sdkAdd, err := AccAddressFromBech32(wallet.GetFormattedAddress(), b.chain.cfg.ChainConfig.Bech32Prefix)
 	if err != nil {
 		return client.Context{}, err
 	}
@@ -203,15 +206,60 @@ func (b *Broadcaster) defaultTxFactory(clientCtx client.Context, account client.
 		WithSimulateAndExecute(false)
 }
 
-// BroadcastTx uses the provided Broadcaster to broadcast all the provided messages which will be signed
+// BroadcastBlobTx uses the provided Broadcaster to broadcast all the provided messages which will be signed
 // by the Wallet provided. The sdk.TxResponse and an error are returned.
-func BroadcastTx(ctx context.Context, broadcaster *Broadcaster, broadcastingWallet Wallet, msgs ...sdk.Msg) (sdk.TxResponse, error) {
-	f, err := broadcaster.GetFactory(ctx, broadcastingWallet)
+func BroadcastBlobTx(ctx context.Context, broadcaster *Broadcaster, signingWallet Wallet, msg sdk.Msg, blobs ...*share.Blob) (sdk.TxResponse, error) {
+	cc, err := broadcaster.GetClientContext(ctx, signingWallet)
 	if err != nil {
 		return sdk.TxResponse{}, err
 	}
 
-	cc, err := broadcaster.GetClientContext(ctx, broadcastingWallet)
+	txf, err := broadcaster.GetFactory(ctx, signingWallet)
+	if err != nil {
+		return sdk.TxResponse{}, err
+	}
+
+	txf, err = txf.Prepare(cc)
+	if err != nil {
+		return sdk.TxResponse{}, err
+	}
+
+	txBz, err := txf.BuildUnsignedTx(msg)
+	if err != nil {
+		return sdk.TxResponse{}, err
+	}
+
+	if err = sdktx.Sign(ctx, txf, signingWallet.GetKeyName(), txBz, true); err != nil {
+		return sdk.TxResponse{}, err
+	}
+
+	txBytes, err := cc.TxConfig.TxEncoder()(txBz.GetTx())
+	if err != nil {
+		return sdk.TxResponse{}, err
+	}
+
+	blobTx, err := squaretx.MarshalBlobTx(txBytes, blobs...)
+	if err != nil {
+		return sdk.TxResponse{}, err
+	}
+
+	res, err := cc.BroadcastTx(blobTx)
+	if err != nil {
+		return sdk.TxResponse{}, err
+	}
+	
+	return getFullyPopulatedResponse(ctx, cc, res.TxHash)
+}
+
+// BroadcastTx uses the provided Broadcaster to broadcast all the provided messages which will be signed
+// by the Wallet provided. The sdk.TxResponse and an error are returned.
+func BroadcastTx(ctx context.Context, broadcaster *Broadcaster, signingWallet Wallet, msgs ...sdk.Msg) (sdk.TxResponse, error) {
+	f, err := broadcaster.GetFactory(ctx, signingWallet)
+	if err != nil {
+		return sdk.TxResponse{}, err
+	}
+
+	cc, err := broadcaster.GetClientContext(ctx, signingWallet)
 	if err != nil {
 		return sdk.TxResponse{}, err
 	}
@@ -220,14 +268,14 @@ func BroadcastTx(ctx context.Context, broadcaster *Broadcaster, broadcastingWall
 		return sdk.TxResponse{}, err
 	}
 
-	txBytes, err := broadcaster.GetTxResponseBytes(ctx, broadcastingWallet)
+	txBytes, err := broadcaster.GetTxResponseBytes(ctx, signingWallet)
 	if err != nil {
 		return sdk.TxResponse{}, err
 	}
 
 	err = wait.ForCondition(ctx, time.Second*30, time.Second*5, func() (bool, error) {
 		var err error
-		txBytes, err = broadcaster.GetTxResponseBytes(ctx, broadcastingWallet)
+		txBytes, err = broadcaster.GetTxResponseBytes(ctx, signingWallet)
 		if err != nil {
 			return false, nil
 		}
@@ -263,7 +311,7 @@ func getFullyPopulatedResponse(ctx context.Context, cc client.Context, txHash st
 	return resp, err
 }
 
-func accAddressFromBech32(address, prefix string) (addr sdk.AccAddress, err error) {
+func AccAddressFromBech32(address, prefix string) (addr sdk.AccAddress, err error) {
 	if len(strings.TrimSpace(address)) == 0 {
 		return sdk.AccAddress{}, fmt.Errorf("empty address string is not allowed")
 	}

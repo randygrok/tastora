@@ -26,12 +26,12 @@ func GetAndFundTestWallet(
 		return types.Wallet{}, fmt.Errorf("failed to get source user wallet: %w", err)
 	}
 
-	fromAddr, err := accAddressFromBech32(chain.faucetWallet.FormattedAddress, chainCfg.Bech32Prefix)
+	fromAddr, err := AccAddressFromBech32(chain.faucetWallet.FormattedAddress, chainCfg.Bech32Prefix)
 	if err != nil {
 		return types.Wallet{}, fmt.Errorf("invalid from address: %w", err)
 	}
 
-	toAddr, err := accAddressFromBech32(wallet.FormattedAddress, chainCfg.Bech32Prefix)
+	toAddr, err := AccAddressFromBech32(wallet.FormattedAddress, chainCfg.Bech32Prefix)
 	if err != nil {
 		return types.Wallet{}, fmt.Errorf("invalid to address: %w", err)
 	}

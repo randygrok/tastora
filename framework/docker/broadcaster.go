@@ -224,16 +224,16 @@ func BroadcastBlobTx(ctx context.Context, broadcaster *Broadcaster, signingWalle
 		return sdk.TxResponse{}, err
 	}
 
-	txBz, err := txf.BuildUnsignedTx(msg)
+	txBuilder, err := txf.BuildUnsignedTx(msg)
 	if err != nil {
 		return sdk.TxResponse{}, err
 	}
 
-	if err = sdktx.Sign(ctx, txf, signingWallet.GetKeyName(), txBz, true); err != nil {
+	if err = sdktx.Sign(ctx, txf, signingWallet.GetKeyName(), txBuilder, true); err != nil {
 		return sdk.TxResponse{}, err
 	}
 
-	txBytes, err := cc.TxConfig.TxEncoder()(txBz.GetTx())
+	txBytes, err := cc.TxConfig.TxEncoder()(txBuilder.GetTx())
 	if err != nil {
 		return sdk.TxResponse{}, err
 	}
@@ -247,7 +247,7 @@ func BroadcastBlobTx(ctx context.Context, broadcaster *Broadcaster, signingWalle
 	if err != nil {
 		return sdk.TxResponse{}, err
 	}
-	
+
 	return getFullyPopulatedResponse(ctx, cc, res.TxHash)
 }
 

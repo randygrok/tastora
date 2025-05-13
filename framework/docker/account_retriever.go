@@ -3,6 +3,7 @@ package docker
 import (
 	"context"
 	"fmt"
+	"github.com/chatton/celestia-test/framework/testutil/sdkacc"
 	"strconv"
 
 	grpc "google.golang.org/grpc"
@@ -39,7 +40,7 @@ func (ar AccountRetriever) GetAccount(clientCtx client.Context, addr sdk.AccAddr
 func (ar AccountRetriever) GetAccountWithHeight(clientCtx client.Context, addr sdk.AccAddress) (client.Account, int64, error) {
 	var header metadata.MD
 
-	bech32Address, err := accAddressToBech32(addr, ar.prefix)
+	bech32Address, err := sdkacc.AddressToBech32(addr, ar.prefix)
 	if err != nil {
 		return nil, 0, err
 	}

@@ -5,6 +5,7 @@ import (
 	"context"
 	sdkmath "cosmossdk.io/math"
 	"fmt"
+	"github.com/celestiaorg/go-square/v2/share"
 	"github.com/chatton/celestia-test/framework/docker/consts"
 	addressutil "github.com/chatton/celestia-test/framework/testutil/address"
 	"github.com/chatton/celestia-test/framework/testutil/toml"
@@ -91,21 +92,30 @@ type Chain struct {
 	keyring      keyring.Keyring
 	findTxMu     sync.Mutex
 	faucetWallet types.Wallet
-	broadcaster  *Broadcaster
+	broadcaster  types.Broadcaster
 }
 
-// BroadcastMessages uses the faucet wallet to send the given messages to the chain.
-// this function can be used when it doesn't matter which wallet signs the transactions.
-func (c *Chain) BroadcastMessages(ctx context.Context, msgs ...sdktypes.Msg) (sdktypes.TxResponse, error) {
-	if c.faucetWallet.FormattedAddress == "" {
+// getBroadcaster returns a broadcaster that can broadcast messages to this chain.
+func (c *Chain) getBroadcaster() types.Broadcaster {
+	if c.broadcaster != nil {
+		return c.broadcaster
+	}
+	c.broadcaster = newBroadcaster(c.t, c)
+	return c.broadcaster
+}
+
+// BroadcastMessages broadcasts the given messages signed on behalf of the provided user.
+func (c *Chain) BroadcastMessages(ctx context.Context, signingWallet types.Wallet, msgs ...sdktypes.Msg) (sdktypes.TxResponse, error) {
+	if c.faucetWallet.GetFormattedAddress() == "" {
 		return sdktypes.TxResponse{}, fmt.Errorf("faucet wallet not initialized")
 	}
-	
-	if c.broadcaster == nil {
-		c.broadcaster = NewBroadcaster(c.t, c)
-	}
+	return c.getBroadcaster().BroadcastMessages(ctx, signingWallet, msgs...)
+}
 
-	return BroadcastTx(ctx, c.broadcaster, &c.faucetWallet, msgs...)
+// BroadcastBlobMessage broadcasts the given messages signed on behalf of the provided user. The transaction bytes are wrapped
+// using the MarshalBlobTx function before broadcasting.
+func (c *Chain) BroadcastBlobMessage(ctx context.Context, signingWallet types.Wallet, msg sdk.Msg, blobs ...*share.Blob) (sdk.TxResponse, error) {
+	return c.getBroadcaster().BroadcastBlobMessage(ctx, signingWallet, msg, blobs...)
 }
 
 func (c *Chain) AddNode(ctx context.Context, overrides map[string]any) error {
@@ -300,7 +310,7 @@ func (c *Chain) Start(ctx context.Context) error {
 	}
 	c.faucetWallet = wallet
 
-	if err := validator0.addGenesisAccount(ctx, wallet.FormattedAddress, []sdk.Coin{{Denom: c.cfg.ChainConfig.Denom, Amount: sdkmath.NewInt(10_000_000_000_000)}}); err != nil {
+	if err := validator0.addGenesisAccount(ctx, wallet.GetFormattedAddress(), []sdk.Coin{{Denom: c.cfg.ChainConfig.Denom, Amount: sdkmath.NewInt(10_000_000_000_000)}}); err != nil {
 		return err
 	}
 
@@ -498,17 +508,18 @@ func (c *Chain) pullImages(ctx context.Context) {
 // CreateWallet will creates a new wallet.
 func (c *Chain) CreateWallet(ctx context.Context, keyName string) (types.Wallet, error) {
 	if err := c.createKey(ctx, keyName); err != nil {
-		return types.Wallet{}, fmt.Errorf("failed to create key with name %q on chain %s: %w", keyName, c.cfg.ChainConfig.Name, err)
+		return nil, fmt.Errorf("failed to create key with name %q on chain %s: %w", keyName, c.cfg.ChainConfig.Name, err)
 	}
 
 	addrBytes, err := c.getAddress(ctx, keyName)
 	if err != nil {
-		return types.Wallet{}, fmt.Errorf("failed to get account address for key %q on chain %s: %w", keyName, c.cfg.ChainConfig.Name, err)
+		return nil, fmt.Errorf("failed to get account address for key %q on chain %s: %w", keyName, c.cfg.ChainConfig.Name, err)
 	}
 
 	formattedAddres := sdktypes.MustBech32ifyAddressBytes(c.cfg.ChainConfig.Bech32Prefix, addrBytes)
 
-	return types.NewWallet(addrBytes, formattedAddres, keyName), nil
+	w := NewWallet(addrBytes, formattedAddres, keyName)
+	return &w, nil
 }
 
 func (c *Chain) createKey(ctx context.Context, keyName string) error {

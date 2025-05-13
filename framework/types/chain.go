@@ -2,6 +2,7 @@ package types
 
 import (
 	"context"
+	"github.com/celestiaorg/go-square/v2/share"
 	rpcclient "github.com/cometbft/cometbft/rpc/client"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 )
@@ -25,8 +26,8 @@ type Chain interface {
 	AddNode(ctx context.Context, overrides map[string]any) error // TODO: use options pattern to allow for overrides.
 	// CreateWallet creates a new wallet with the specified keyName and returns the Wallet instance or an error.
 	CreateWallet(ctx context.Context, keyName string) (Wallet, error)
-
-	BroadcastMessages(ctx context.Context, msgs ...sdk.Msg) (sdk.TxResponse, error)
+	BroadcastMessages(ctx context.Context, signingWallet Wallet, msgs ...sdk.Msg) (sdk.TxResponse, error)
+	BroadcastBlobMessage(ctx context.Context, signingWallet Wallet, msg sdk.Msg, blobs ...*share.Blob) (sdk.TxResponse, error)
 }
 
 type ChainNode interface {

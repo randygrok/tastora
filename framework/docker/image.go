@@ -216,6 +216,7 @@ func (image *Image) Start(ctx context.Context, cmd []string, opts ContainerOptio
 		hostName      = CondenseHostName(containerName)
 		logger        = image.log.With(
 			zap.String("command", strings.Join(cmd, " ")),
+			zap.Strings("env,", opts.Env),
 			zap.String("hostname", hostName),
 			zap.String("container", containerName),
 		)

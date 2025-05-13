@@ -47,7 +47,7 @@ func (n *node) exec(ctx context.Context, logger *zap.Logger, cmd []string, env [
 	}
 	res := job.Run(ctx, cmd, opts)
 	if res.Err != nil {
-		logger.Error("failed to run command", zap.String("cmd", fmt.Sprintf("%v", cmd)), zap.Error(res.Err), zap.String("stderr", string(res.Stderr)))
+		logger.Error("failed to run command", zap.String("cmd", fmt.Sprintf("%v", cmd)), zap.Error(res.Err), zap.String("stderr", string(res.Stderr)), zap.Strings("env", env))
 	}
 	return res.Stdout, res.Stderr, res.Err
 }

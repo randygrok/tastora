@@ -3,18 +3,19 @@ package wait
 import (
 	"context"
 	"fmt"
+	"github.com/chatton/celestia-test/framework/types"
 	"golang.org/x/sync/errgroup"
 	"time"
 )
 
-// ChainHeighter fetches the current chain block height.
-type ChainHeighter interface {
+// Heighter fetches the current chain block height.
+type Heighter interface {
 	Height(ctx context.Context) (int64, error)
 }
 
 // ForBlocks blocks until all chains reach a block height delta equal to or greater than the delta argument.
-// If a ChainHeighter does not monotonically increase the height, this function may block program execution indefinitely.
-func ForBlocks(ctx context.Context, delta int, chains ...ChainHeighter) error {
+// If a Heighter does not monotonically increase the height, this function may block program execution indefinitely.
+func ForBlocks(ctx context.Context, delta int, chains ...Heighter) error {
 	if len(chains) == 0 {
 		panic("missing chains")
 	}
@@ -44,7 +45,7 @@ func ForBlocksUtil(maxBlocks int, fn func(i int) error) error {
 }
 
 // ForNodesInSync returns an error if the nodes are not in sync with the chain.
-func ForNodesInSync(ctx context.Context, chain ChainHeighter, nodes []ChainHeighter) error {
+func ForNodesInSync(ctx context.Context, chain Heighter, nodes []Heighter) error {
 	var chainHeight int64
 	nodeHeights := make([]int64, len(nodes))
 	eg, egCtx := errgroup.WithContext(ctx)
@@ -71,7 +72,7 @@ func ForNodesInSync(ctx context.Context, chain ChainHeighter, nodes []ChainHeigh
 }
 
 // ForInSync blocks until all nodes have heights greater than or equal to the chain height.
-func ForInSync(ctx context.Context, chain ChainHeighter, nodes ...ChainHeighter) error {
+func ForInSync(ctx context.Context, chain Heighter, nodes ...Heighter) error {
 	if len(nodes) == 0 {
 		panic("missing nodes")
 	}
@@ -89,7 +90,7 @@ func ForInSync(ctx context.Context, chain ChainHeighter, nodes ...ChainHeighter)
 }
 
 type height struct {
-	Chain ChainHeighter
+	Chain Heighter
 
 	starting int64
 	current  int64
@@ -145,6 +146,31 @@ func ForCondition(ctx context.Context, timeoutAfter, pollingInterval time.Durati
 			}
 			if ok {
 				return nil
+			}
+		}
+	}
+}
+
+// ForDANodeToReachHeight waits for a data availability node to reach a target block height within a given context.
+// It periodically checks the node's current height and returns nil when the target height is reached.
+// Returns an error if the context times out or if retrieving the header fails persistently.
+func ForDANodeToReachHeight(ctx context.Context, node types.DANode, targetHeight uint64, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("timed out waiting for node to reach height %d: %w", targetHeight, ctx.Err())
+		case <-ticker.C:
+			header, err := node.GetHeader(ctx, targetHeight)
+			if err == nil {
+				if header.Height >= targetHeight {
+					return nil
+				}
 			}
 		}
 	}

@@ -13,12 +13,9 @@ type Provider struct {
 	cfg Config
 }
 
-// GetNode retrieves a node of the specified type. Only "bridge" node type is supported; otherwise, it panics.
-func (p *Provider) GetNode(ctx context.Context, nodeType string) (types.Node, error) {
-	if nodeType != "bridge" {
-		panic("only bridge node type is supported")
-	}
-	return newBridgeNode(ctx, p.t.Name(), p.cfg)
+// GetDANode retrieves a node of the specified type.
+func (p *Provider) GetDANode(ctx context.Context, nodeType types.DANodeType) (types.DANode, error) {
+	return newDANode(ctx, p.t.Name(), p.cfg, nodeType)
 }
 
 // GetChain returns an initialized Chain instance based on the provided configuration and test name context.

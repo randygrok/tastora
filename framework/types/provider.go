@@ -10,6 +10,6 @@ import "context"
 type Provider interface {
 	// GetChain returns an implement of the Chain interface.
 	GetChain(ctx context.Context) (Chain, error)
-	// GetNode returns an implementation of the Node interface.
-	GetNode(ctx context.Context, nodeType string) (Node, error)
+	// GetDANode returns an implementation of the Node interface.
+	GetDANode(ctx context.Context, nodeType DANodeType) (DANode, error)
 }

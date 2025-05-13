@@ -14,8 +14,8 @@ type Config struct {
 	DockerNetworkID string
 	// ChainConfig defines configuration specific to the app chain.
 	ChainConfig *ChainConfig
-	// BridgeNodeConfig defines the configuration specific to bridge nodes.
-	BridgeNodeConfig *BridgeNodeConfig
+	// DANodeConfig defines the configuration specific to bridge nodes.
+	DANodeConfig *DANodeConfig
 }
 
 type ChainConfig struct {
@@ -67,7 +67,7 @@ type ChainConfig struct {
 	Env []string
 }
 
-type BridgeNodeConfig struct {
+type DANodeConfig struct {
 	// ChainID should be the chain ID of the host being pointed to by --core.ip
 	ChainID string
 	// Docker images required for running bridge nodes.

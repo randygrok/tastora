@@ -171,9 +171,6 @@ func (b *broadcaster) defaultClientContext(fromWallet types.Wallet, sdkAdd sdk.A
 		WithKeyring(kr).
 		WithBroadcastMode(flags.BroadcastSync).
 		WithCodec(b.chain.cfg.ChainConfig.EncodingConfig.Codec)
-
-	// NOTE: the returned context used to have .WithHomeDir(cn.Home),
-	// but that field no longer exists and the test against Broadcaster still passes without it.
 }
 
 // defaultTxFactory creates a new Factory with default configuration.

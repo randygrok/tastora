@@ -5,8 +5,8 @@ import (
 	"github.com/moby/moby/client"
 	"testing"
 
-	"github.com/chatton/celestia-test/framework/testutil/maps"
-	"github.com/chatton/celestia-test/framework/testutil/toml"
+	"github.com/celestiaorg/tastora/framework/testutil/maps"
+	"github.com/celestiaorg/tastora/framework/testutil/toml"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/cosmos/cosmos-sdk/types/module/testutil"
 	"github.com/cosmos/cosmos-sdk/x/auth"

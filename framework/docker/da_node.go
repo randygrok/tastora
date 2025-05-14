@@ -3,9 +3,9 @@ package docker
 import (
 	"context"
 	"fmt"
-	"github.com/chatton/celestia-test/framework/docker/consts"
-	"github.com/chatton/celestia-test/framework/testutil/toml"
-	"github.com/chatton/celestia-test/framework/types"
+	"github.com/celestiaorg/tastora/framework/docker/consts"
+	"github.com/celestiaorg/tastora/framework/testutil/toml"
+	"github.com/celestiaorg/tastora/framework/types"
 	volumetypes "github.com/docker/docker/api/types/volume"
 	"github.com/docker/go-connections/nat"
 	"go.uber.org/zap"

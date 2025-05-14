@@ -137,7 +137,7 @@ func (c *ContainerLifecycle) StartContainer(ctx context.Context) error {
 		return err
 	}
 
-	if err := c.CheckForFailedStart(ctx, time.Second*1); err != nil {
+	if err := c.checkForFailedStart(ctx, time.Second*2); err != nil {
 		return err
 	}
 
@@ -145,14 +145,15 @@ func (c *ContainerLifecycle) StartContainer(ctx context.Context) error {
 	return nil
 }
 
-// CheckForFailedStart checks the logs of the container for a
-// panic message after a wait period to allow the container to start.
-func (c *ContainerLifecycle) CheckForFailedStart(ctx context.Context, wait time.Duration) error {
+// checkForFailedStart checks if the container failed to start by analyzing logs and inspecting its state after waiting.
+func (c *ContainerLifecycle) checkForFailedStart(ctx context.Context, wait time.Duration) error {
 	time.Sleep(wait)
+
 	containerLogs, err := c.client.ContainerLogs(ctx, c.id, container.LogsOptions{
 		ShowStdout: true,
 		ShowStderr: true,
 	})
+
 	if err != nil {
 		return fmt.Errorf("failed to read logs from container %s: %w", c.containerName, err)
 	}
@@ -164,19 +165,27 @@ func (c *ContainerLifecycle) CheckForFailedStart(ctx context.Context, wait time.
 		return fmt.Errorf("failed to read logs from container %s: %w", c.containerName, err)
 	}
 
-	if err := ParseSDKPanicFromText(logs.String()); err != nil {
-		// Must use Println and not the logger as there are ascii escape codes in the logs.
-		fmt.Printf("\nContainer name: %s.\nerror: %s.\nlogs\n%s\n", c.containerName, err.Error(), logs.String()) //nolint: forbidigo
+	if err := parseSDKPanicFromText(logs.String()); err != nil {
+		fmt.Printf("\nContainer name: %s.\nerror: %s.\nlogs\n%s\n", c.containerName, err.Error(), logs.String())
 		return fmt.Errorf("container %s failed to start: %w", c.containerName, err)
+	}
+
+	inspect, err := c.client.ContainerInspect(ctx, c.id)
+	if err != nil {
+		return fmt.Errorf("failed to inspect container %s: %w", c.containerName, err)
+	}
+
+	if !inspect.State.Running {
+		return fmt.Errorf("container %s exited early (status: %s, exit code: %d)\nlogs:\n %s", c.containerName, inspect.State.Status, inspect.State.ExitCode, logs)
 	}
 
 	return nil
 }
 
-// ParseSDKPanicFromText returns a panic line if it exists in the logs so
+// parseSDKPanicFromText returns a panic line if it exists in the logs so
 // that it can be returned to the user in a proper error message instead of
 // hanging.
-func ParseSDKPanicFromText(text string) error {
+func parseSDKPanicFromText(text string) error {
 	if !strings.Contains(text, "panic: ") {
 		return nil
 	}

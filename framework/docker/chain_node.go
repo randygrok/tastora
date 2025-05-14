@@ -60,12 +60,11 @@ type ChainNodes []*ChainNode
 
 type ChainNode struct {
 	*node
-	Index        int
-	cfg          Config
-	Validator    bool
-	Client       rpcclient.Client
-	GrpcConn     *grpc.ClientConn
-	preStartNode func(*ChainNode)
+	Index     int
+	cfg       Config
+	Validator bool
+	Client    rpcclient.Client
+	GrpcConn  *grpc.ClientConn
 
 	lock sync.Mutex
 	log  *zap.Logger

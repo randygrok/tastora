@@ -74,7 +74,6 @@ type DANode struct {
 	nodeType types.DANodeType
 	cfg      DANodeConfig
 	log      *zap.Logger
-	testName string
 	// ports that are resolvable from the test runners themselves.
 	hostRPCPort string
 	hostP2PPort string

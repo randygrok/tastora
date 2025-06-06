@@ -12,6 +12,7 @@ import (
 	"github.com/celestiaorg/tastora/framework/types"
 	sdktx "github.com/cosmos/cosmos-sdk/client/tx"
 	"path"
+	"reflect"
 	"testing"
 	"time"
 
@@ -275,7 +276,12 @@ func (b *broadcaster) BroadcastMessages(ctx context.Context, signingWallet types
 	if err != nil {
 		return sdk.TxResponse{}, err
 	}
-	b.t.Logf("broadcasted tx hash: %s", respWithTxHash.TxHash)
+	var msgTypes []string
+	for _, msg := range msgs {
+		msgType := reflect.TypeOf(msg).Elem().Name()
+		msgTypes = append(msgTypes, msgType)
+	}
+	b.t.Logf("broadcasted msg from wallet address %s; message types: %s; tx hash: %s", signingWallet.GetFormattedAddress(), msgTypes, respWithTxHash.TxHash)
 
 	return getFullyPopulatedResponse(ctx, cc, respWithTxHash.TxHash)
 }

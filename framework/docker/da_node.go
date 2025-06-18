@@ -1,6 +1,7 @@
 package docker
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"github.com/celestiaorg/tastora/framework/docker/consts"
@@ -9,6 +10,8 @@ import (
 	volumetypes "github.com/docker/docker/api/types/volume"
 	"github.com/docker/go-connections/nat"
 	"go.uber.org/zap"
+	"path"
+	"regexp"
 	"sync"
 )
 
@@ -34,6 +37,7 @@ func newDANode(ctx context.Context, testName string, cfg Config, idx int, nodeTy
 	image := cfg.DataAvailabilityNetworkConfig.Image
 
 	bn := &DANode{
+		cfg:      cfg,
 		nodeType: nodeType,
 		log: cfg.Logger.With(
 			zap.String("node_type", nodeType.String()),
@@ -71,13 +75,32 @@ func newDANode(ctx context.Context, testName string, cfg Config, idx int, nodeTy
 // DANode is a docker implementation of a celestia bridge node.
 type DANode struct {
 	*node
+	cfg            Config
 	mu             sync.Mutex
 	hasBeenStarted bool
 	nodeType       types.DANodeType
 	log            *zap.Logger
+	wallet         types.Wallet
+	// adminAuthToken is a token that has admin access, it should be generated after init.
+	adminAuthToken string
 	// ports that are resolvable from the test runners themselves.
 	hostRPCPort string
 	hostP2PPort string
+}
+
+func (n *DANode) GetWallet() (types.Wallet, error) {
+	return n.wallet, nil
+}
+
+func (n *DANode) GetAuthToken() (string, error) {
+	if n.adminAuthToken == "" {
+		return "", fmt.Errorf("admin token has not yet been generated for da node: %s", n.Name())
+	}
+	return n.adminAuthToken, nil
+}
+
+func (n *DANode) GetInternalHostName() (string, error) {
+	return n.HostName(), nil
 }
 
 // GetType returns the type of the DANode as defined by the types.DANodeType enum.
@@ -127,6 +150,10 @@ func (n *DANode) startAndInitialize(ctx context.Context, opts ...types.DANodeSta
 
 	if err := n.initNode(ctx, startOpts.ChainID, env); err != nil {
 		return fmt.Errorf("failed to initialize da node: %w", err)
+	}
+
+	if err := n.initAuthToken(ctx); err != nil {
+		return fmt.Errorf("failed to initialize auth token: %w", err)
 	}
 
 	if err := n.startNode(ctx, startOpts.StartArguments, startOpts.ConfigModifications, env); err != nil {
@@ -192,10 +219,48 @@ func (n *DANode) startNode(ctx context.Context, additionalStartArgs []string, co
 
 // initNode initializes the DANode by running the "init" command for the specified DANode type, network, and keyring settings.
 func (n *DANode) initNode(ctx context.Context, chainID string, env []string) error {
+	if err := n.createWallet(ctx); err != nil {
+		return fmt.Errorf("failed to create wallet: %w", err)
+	}
+
 	// note: my_celes_key is the default key name for the da node.
-	cmd := []string{"celestia", n.nodeType.String(), "init", "--p2p.network", chainID, "--keyring.keyname", "my_celes_key", "--node.store", n.homeDir}
+	cmd := []string{"celestia", n.nodeType.String(), "init", "--p2p.network", chainID, "--keyring.keyname", "my-key", "--node.store", n.homeDir}
 	_, _, err := n.exec(ctx, n.log, cmd, env)
 	return err
+}
+
+// createWallet creates a wallet for use on this node. Creating one explicitly
+// gives us access to the address for use in tests.
+func (n *DANode) createWallet(ctx context.Context) error {
+	cmd := []string{"cel-key", "add", "my-key", "--node.type", n.nodeType.String(), "--keyring-dir", path.Join(n.homeDir, "keys"), "--output", "json"}
+	_, stderr, err := n.exec(ctx, n.log, cmd, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create wallet: %w", err)
+	}
+
+	address := extractAddressFromCreateWalletOutput(string(stderr))
+	w := NewWallet(nil, address, "celestia", "my-key")
+	n.wallet = &w
+	return nil
+}
+
+// extractAddressFromCreateWalletOutput extracts the address from the output of the create wallet command.
+// since the output is not fully structured we still need to parse the string.
+//
+// Sample output of the create wallet command:
+//
+// Starting Celestia Node with command:
+// cel-key add my-key --node.type bridge --output json
+//
+// using directory:  /home/celestia/keys
+// {"name":"my-key","type":"local","address":"celestia1y7qyj3mxzjxun02nf7s7msh4u8fnqyegtxwp6e","pubkey":"{\"@type\":\"/cosmos.crypto.secp256k1.PubKey\",\"key\":\"A612x2rTnch9iYXdzZ3EBBnpR9MLREhZyG+G2ox+uct1\"}","mnemonic":"slender night portion collect oyster kitten zone require tower have glance mixture siege turn text convince worry wagon aim jar ceiling harbor second jealous"}
+func extractAddressFromCreateWalletOutput(output string) string {
+	re := regexp.MustCompile(`"address"\s*:\s*"([^"]+)"`)
+	matches := re.FindStringSubmatch(output)
+	if len(matches) < 2 {
+		panic("address not found")
+	}
+	return matches[1]
 }
 
 // createNodeContainer creates and initializes a container for the DANode with specified context, options, and environment variables.
@@ -207,6 +272,21 @@ func (n *DANode) createNodeContainer(ctx context.Context, additionalStartArgs []
 		usingPorts[k] = v
 	}
 	return n.containerLifecycle.CreateContainer(ctx, n.TestName, n.NetworkID, n.Image, usingPorts, "", n.bind(), nil, n.HostName(), cmd, env, []string{})
+}
+
+// initAuthToken initialises an admin auth token.
+func (n *DANode) initAuthToken(ctx context.Context) error {
+	// Command to generate admin token
+	cmd := []string{"celestia", n.nodeType.String(), "auth", "admin"}
+
+	// Run the command inside the container
+	stdout, stderr, err := n.exec(ctx, n.log, cmd, nil)
+	if err != nil {
+		return fmt.Errorf("failed to generate auth token (stderr=%q): %w", stderr, err)
+	}
+
+	n.adminAuthToken = string(bytes.TrimSpace(stdout))
+	return nil
 }
 
 // disableRPCAuthModification provides a modification which disables RPC authentication so that the tests can use the endpoints without configuring auth.

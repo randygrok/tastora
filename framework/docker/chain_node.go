@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/celestiaorg/tastora/framework/docker/file"
 	"github.com/celestiaorg/tastora/framework/testutil/toml"
 	"github.com/celestiaorg/tastora/framework/types"
 	tmjson "github.com/cometbft/cometbft/libs/json"
@@ -353,18 +352,9 @@ func (tn *ChainNode) setPeers(ctx context.Context, peers string) error {
 func (tn *ChainNode) createNodeContainer(ctx context.Context) error {
 	chainCfg := tn.cfg.ChainConfig
 
-	var cmd []string
-	if chainCfg.NoHostMount {
-		startCmd := fmt.Sprintf("cp -r %s %s_nomnt && %s start --home %s_nomnt", tn.homeDir, tn.homeDir, chainCfg.Bin, tn.homeDir)
-		if len(chainCfg.AdditionalStartArgs) > 0 {
-			startCmd = fmt.Sprintf("%s %s", startCmd, chainCfg.AdditionalStartArgs)
-		}
-		cmd = []string{"sh", "-c", startCmd}
-	} else {
-		cmd = []string{chainCfg.Bin, "start", "--home", tn.homeDir}
-		if len(chainCfg.AdditionalStartArgs) > 0 {
-			cmd = append(cmd, chainCfg.AdditionalStartArgs...)
-		}
+	cmd := []string{chainCfg.Bin, "start", "--home", tn.homeDir}
+	if len(chainCfg.AdditionalStartArgs) > 0 {
+		cmd = append(cmd, chainCfg.AdditionalStartArgs...)
 	}
 
 	usingPorts := nat.PortMap{}
@@ -400,7 +390,7 @@ func (tn *ChainNode) createNodeContainer(ctx context.Context) error {
 }
 
 func (tn *ChainNode) overwriteGenesisFile(ctx context.Context, content []byte) error {
-	err := tn.writeFile(ctx, content, "config/genesis.json")
+	err := tn.writeFile(ctx, tn.logger(), content, "config/genesis.json")
 	if err != nil {
 		return fmt.Errorf("overwriting genesis.json: %w", err)
 	}
@@ -419,27 +409,8 @@ func (tn *ChainNode) collectGentxs(ctx context.Context) error {
 	return err
 }
 
-// readFile reads the contents of a single file at the specified path in the docker filesystem.
-// relPath describes the location of the file in the docker volume relative to the home directory.
-func (tn *ChainNode) readFile(ctx context.Context, relPath string) ([]byte, error) {
-	fr := file.NewRetriever(tn.logger(), tn.DockerClient, tn.TestName)
-	gen, err := fr.SingleFileContent(ctx, tn.VolumeName, relPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read file at %s: %w", relPath, err)
-	}
-	return gen, nil
-}
-
-// writeFile accepts file contents in a byte slice and writes the contents to
-// the docker filesystem. relPath describes the location of the file in the
-// docker volume relative to the home directory.
-func (tn *ChainNode) writeFile(ctx context.Context, content []byte, relPath string) error {
-	fw := file.NewWriter(tn.logger(), tn.DockerClient, tn.TestName)
-	return fw.WriteFile(ctx, tn.VolumeName, relPath, content)
-}
-
 func (tn *ChainNode) genesisFileContent(ctx context.Context) ([]byte, error) {
-	gen, err := tn.readFile(ctx, "config/genesis.json")
+	gen, err := tn.readFile(ctx, tn.logger(), "config/genesis.json")
 	if err != nil {
 		return nil, fmt.Errorf("getting genesis.json content: %w", err)
 	}
@@ -455,12 +426,12 @@ func (tn *ChainNode) copyGentx(ctx context.Context, destVal *ChainNode) error {
 
 	relPath := fmt.Sprintf("config/gentx/gentx-%s.json", nid)
 
-	gentx, err := tn.readFile(ctx, relPath)
+	gentx, err := tn.readFile(ctx, tn.logger(), relPath)
 	if err != nil {
 		return fmt.Errorf("getting gentx content: %w", err)
 	}
 
-	err = destVal.writeFile(ctx, gentx, relPath)
+	err = destVal.writeFile(ctx, destVal.logger(), gentx, relPath)
 	if err != nil {
 		return fmt.Errorf("overwriting gentx: %w", err)
 	}
@@ -473,7 +444,7 @@ func (tn *ChainNode) nodeID(ctx context.Context) (string, error) {
 	// This used to call p2p.LoadNodeKey against the file on the host,
 	// but because we are transitioning to operating on Docker volumes,
 	// we only have to tmjson.Unmarshal the raw content.
-	j, err := tn.readFile(ctx, "config/node_key.json")
+	j, err := tn.readFile(ctx, tn.logger(), "config/node_key.json")
 	if err != nil {
 		return "", fmt.Errorf("getting node_key.json content: %w", err)
 	}

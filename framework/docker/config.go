@@ -16,6 +16,8 @@ type Config struct {
 	ChainConfig *ChainConfig
 	// DataAvailabilityNetworkConfig defines the configuration for the data availability network settings.
 	DataAvailabilityNetworkConfig *DataAvailabilityNetworkConfig
+	// RollkitChainConfig defines configuration settings specific to a Rollkit-based chain.
+	RollkitChainConfig *RollkitChainConfig
 }
 
 type ChainConfig struct {
@@ -33,7 +35,7 @@ type ChainConfig struct {
 	// Docker images required for running chain nodes.
 	Images []DockerImage
 	// Binary to execute for the chain node daemon.
-	Bin string `yaml:"bin"`
+	Bin string
 	// Bech32 prefix for chain addresses, e.g. cosmos.
 	Bech32Prefix string
 	// Denomination of native currency, e.g. uatom.
@@ -76,5 +78,20 @@ type DataAvailabilityNetworkConfig struct {
 	// LightNodeCount specifies the number of light nodes to deploy in the data availability network.
 	LightNodeCount int
 	// Image specifies the Docker image used for nodes in the data availability network.
+	Image DockerImage
+}
+
+type RollkitChainConfig struct {
+	// ChainID, e.g. test-rollkit
+	ChainID string
+	// Environment variables for chain nodes
+	Env []string
+	// Binary to execute for the rollkit chain.
+	Bin string
+	// AggregatorPassphrase is the passphrase used when a node is an aggregator.
+	AggregatorPassphrase string
+	// NumNodes
+	NumNodes int
+	// Image specifies the Docker image used for the rollkit nodes.
 	Image DockerImage
 }

@@ -108,8 +108,19 @@ func (s *DockerTestSuite) createDefaultProvider() *Provider {
 			LightNodeCount:  1,
 			Image: DockerImage{
 				Repository: "ghcr.io/celestiaorg/celestia-node",
-				Version:    "v0.23.0-mocha",
+				Version:    "pr-4283", // TODO: use tag that includes changes from https://github.com/celestiaorg/celestia-node/pull/4283.
 				UIDGID:     "10001:10001",
+			},
+		},
+		RollkitChainConfig: &RollkitChainConfig{
+			ChainID:              "test",
+			Bin:                  "testapp",
+			AggregatorPassphrase: "12345678",
+			NumNodes:             1,
+			Image: DockerImage{
+				Repository: "ghcr.io/rollkit/rollkit",
+				Version:    "main",
+				UIDGID:     "2000",
 			},
 		},
 	}

@@ -2,6 +2,7 @@ package docker
 
 import (
 	"context"
+	"github.com/celestiaorg/tastora/framework/types"
 	"github.com/moby/moby/client"
 	"testing"
 
@@ -24,7 +25,7 @@ type DockerTestSuite struct {
 	logger       *zap.Logger
 	encConfig    testutil.TestEncodingConfig
 	provider     *Provider
-	chain        *Chain
+	chain        types.Chain
 }
 
 // SetupSuite runs once before all tests in the suite.
@@ -36,22 +37,12 @@ func (s *DockerTestSuite) SetupSuite() {
 	sdkConf.SetBech32PrefixForAccount("celestia", "celestiapub")
 	sdkConf.Seal()
 
-	s.dockerClient, s.networkID = DockerSetup(s.T())
-
 	s.logger = zaptest.NewLogger(s.T())
 	s.encConfig = testutil.MakeTestEncodingConfig(auth.AppModuleBasic{}, bank.AppModuleBasic{})
 }
 
 func (s *DockerTestSuite) SetupTest() {
 	s.dockerClient, s.networkID = DockerSetup(s.T())
-
-	s.provider = s.createDefaultProvider()
-	chain, err := s.provider.GetChain(s.ctx)
-	s.Require().NoError(err)
-	s.chain = chain.(*Chain)
-
-	err = s.chain.Start(s.ctx)
-	s.Require().NoError(err)
 }
 
 // TearDownTest removes docker resources.
@@ -59,8 +50,8 @@ func (s *DockerTestSuite) TearDownTest() {
 	DockerCleanup(s.T(), s.dockerClient)()
 }
 
-// createDefaultProvider returns a provider with the standard Celestia config used for all tests.
-func (s *DockerTestSuite) createDefaultProvider() *Provider {
+// CreateDockerProvider returns a provider with configuration options applied to the default Celestia config.
+func (s *DockerTestSuite) CreateDockerProvider(opts ...ConfigOption) *Provider {
 	numValidators := 1
 	numFullNodes := 0
 
@@ -125,6 +116,10 @@ func (s *DockerTestSuite) createDefaultProvider() *Provider {
 		},
 	}
 
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+
 	return NewProvider(cfg, s.T())
 }
 
@@ -158,6 +153,60 @@ func configOverrides() toml.Toml {
 	txIndex["indexer"] = "kv"
 	tomlCfg["tx_index"] = txIndex
 	return tomlCfg
+}
+
+// TestPerNodeDifferentImages tests that nodes can be deployed with different Docker images
+func (s *DockerTestSuite) TestPerNodeDifferentImages() {
+	defaultImage := DockerImage{
+		Repository: "ghcr.io/celestiaorg/celestia-app",
+		Version:    "v4.0.0-rc6",
+		UIDGID:     "10001:10001",
+	}
+
+	alternativeImage := DockerImage{
+		Repository: "ghcr.io/celestiaorg/celestia-app",
+		Version:    "v4.0.0-rc5", // Different version
+		UIDGID:     "10001:10001",
+	}
+
+	// set up chain with 2 validators using different images
+	numValidators := 2
+
+	var err error
+	s.provider = s.CreateDockerProvider(
+		WithNumValidators(numValidators),
+		WithPerNodeConfig(map[int]*ChainNodeConfig{
+			0: {
+				Image:               &defaultImage, // first validator uses one image
+				AdditionalStartArgs: []string{"--force-no-bbr", "--log_level", "info"},
+			},
+			1: {
+				Image:               &alternativeImage, // second validator uses a different image
+				AdditionalStartArgs: []string{"--force-no-bbr", "--log_level", "debug"},
+			},
+		}),
+	)
+
+	s.chain, err = s.provider.GetChain(s.ctx)
+	s.Require().NoError(err)
+
+	err = s.chain.Start(s.ctx)
+	s.Require().NoError(err)
+
+	validatorNodes := s.chain.GetNodes()
+	s.Require().Len(validatorNodes, numValidators, "expected 2 validators")
+
+	// verify both validators are accessible
+	for i, node := range validatorNodes {
+		client, err := node.GetRPCClient()
+		s.Require().NoError(err, "node %d should have accessible RPC client", i)
+
+		status, err := client.Status(s.ctx)
+		s.Require().NoError(err, "node %d should return status", i)
+		s.Require().NotNil(status, "node %d status should not be nil", i)
+
+		s.T().Logf("Node %d is running with chain ID: %s", i, status.NodeInfo.Network)
+	}
 }
 
 func TestDockerSuite(t *testing.T) {

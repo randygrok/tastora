@@ -14,6 +14,15 @@ func (s *DockerTestSuite) TestDANetworkCreation() {
 	}
 
 	ctx := context.Background()
+
+	var err error
+	s.provider = s.CreateDockerProvider()
+	s.chain, err = s.provider.GetChain(ctx)
+	s.Require().NoError(err)
+
+	err = s.chain.Start(ctx)
+	s.Require().NoError(err)
+
 	var (
 		bridgeNodes []types.DANode
 		lightNodes  []types.DANode
@@ -44,7 +53,7 @@ func (s *DockerTestSuite) TestDANetworkCreation() {
 	fullNode := fullNodes[0]
 	lightNode := lightNodes[0]
 
-	chainID := s.chain.cfg.ChainConfig.ChainID
+	chainID := s.chain.GetChainID()
 
 	s.T().Run("bridge node can be started", func(t *testing.T) {
 		err = bridgeNode.Start(ctx,
@@ -112,6 +121,14 @@ func (s *DockerTestSuite) TestModifyConfigFileDANetwork() {
 	ctx := context.Background()
 	var bridgeNodes []types.DANode
 
+	var err error
+	s.provider = s.CreateDockerProvider()
+	s.chain, err = s.provider.GetChain(ctx)
+	s.Require().NoError(err)
+
+	err = s.chain.Start(ctx)
+	s.Require().NoError(err)
+
 	// default configuration uses 1/1/1 for Bridge/Light/Full da nodes.
 	daNetwork, err := s.provider.GetDataAvailabilityNetwork(ctx)
 	s.Require().NoError(err)
@@ -128,7 +145,7 @@ func (s *DockerTestSuite) TestModifyConfigFileDANetwork() {
 
 	bridgeNode := bridgeNodes[0]
 
-	chainID := s.chain.cfg.ChainConfig.ChainID
+	chainID := s.chain.GetChainID()
 
 	s.T().Run("bridge node can be started", func(t *testing.T) {
 		err = bridgeNode.Start(ctx,

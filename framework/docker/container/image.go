@@ -1,4 +1,4 @@
-package docker
+package container
 
 import (
 	"context"
@@ -8,14 +8,14 @@ import (
 	"io"
 )
 
-type DockerImage struct {
+type Image struct {
 	Repository string
 	Version    string
 	UIDGID     string
 }
 
-func NewDockerImage(repository, version, uidGID string) DockerImage {
-	return DockerImage{
+func NewImage(repository, version, uidGID string) Image {
+	return Image{
 		Repository: repository,
 		Version:    version,
 		UIDGID:     uidGID,
@@ -23,7 +23,7 @@ func NewDockerImage(repository, version, uidGID string) DockerImage {
 }
 
 // Ref returns the reference to use when e.g. creating a container.
-func (i DockerImage) Ref() string {
+func (i Image) Ref() string {
 	if i.Version == "" {
 		return i.Repository + ":latest"
 	}
@@ -31,7 +31,7 @@ func (i DockerImage) Ref() string {
 	return i.Repository + ":" + i.Version
 }
 
-func (i DockerImage) PullImage(ctx context.Context, client *client.Client) error {
+func (i Image) PullImage(ctx context.Context, client *client.Client) error {
 	ref := i.Ref()
 	_, _, err := client.ImageInspectWithRaw(ctx, ref)
 	if err != nil {

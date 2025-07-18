@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/celestiaorg/tastora/framework/docker/container"
+	"github.com/celestiaorg/tastora/framework/docker/internal"
 	"path"
 	"regexp"
 	"strings"
@@ -37,18 +39,18 @@ func newDANode(ctx context.Context, testName string, cfg Config, idx int, nodeTy
 		zap.String("node_type", nodeType.String()),
 	)
 	daNode := &DANode{
-		cfg:           cfg,
-		nodeType:      nodeType,
-		ContainerNode: newContainerNode(cfg.DockerNetworkID, cfg.DockerClient, testName, defaultImage, "/home/celestia", idx, nodeType.String(), logger),
+		cfg:      cfg,
+		nodeType: nodeType,
+		Node:     container.NewNode(cfg.DockerNetworkID, cfg.DockerClient, testName, defaultImage, "/home/celestia", idx, nodeType.String(), logger),
 	}
 
-	daNode.containerLifecycle = NewContainerLifecycle(cfg.Logger, cfg.DockerClient, daNode.Name())
+	daNode.SetContainerLifecycle(container.NewLifecycle(cfg.Logger, cfg.DockerClient, daNode.Name()))
 
-	// image may be overridden by each node, update ContainerNode with the final image
+	// image may be overridden by each node, update Node with the final image
 	daNode.Image = daNode.getImage()
 
 	// create and setup volume using shared logic
-	if err := daNode.createAndSetupVolume(ctx, daNode.Name()); err != nil {
+	if err := daNode.CreateAndSetupVolume(ctx, daNode.Name()); err != nil {
 		return nil, err
 	}
 
@@ -57,7 +59,7 @@ func newDANode(ctx context.Context, testName string, cfg Config, idx int, nodeTy
 
 // DANode is a docker implementation of a celestia da node.
 type DANode struct {
-	*ContainerNode
+	*container.Node
 	cfg            Config
 	mu             sync.Mutex
 	hasBeenStarted bool
@@ -104,12 +106,12 @@ func (n *DANode) GetType() types.DANodeType {
 
 // Name returns the container name for the DANode.
 func (n *DANode) Name() string {
-	return fmt.Sprintf("da-%s-%d-%s", n.nodeType.String(), n.Index, SanitizeContainerName(n.TestName))
+	return fmt.Sprintf("da-%s-%d-%s", n.nodeType.String(), n.Index, internal.SanitizeContainerName(n.TestName))
 }
 
 // HostName returns the condensed hostname for the DANode.
 func (n *DANode) HostName() string {
-	return CondenseHostName(n.Name())
+	return internal.CondenseHostName(n.Name())
 }
 
 // GetHostRPCAddress returns the externally resolvable RPC address of the bridge node.
@@ -119,7 +121,7 @@ func (n *DANode) GetHostRPCAddress() string {
 
 // Stop terminates the DANode by stopping its associated container gracefully using the provided context.
 func (n *DANode) Stop(ctx context.Context) error {
-	return n.stopContainer(ctx)
+	return n.StopContainer(ctx)
 }
 
 // Start initializes and starts the DANode with the provided core IP and genesis hash in the given context.
@@ -130,7 +132,7 @@ func (n *DANode) Start(ctx context.Context, opts ...types.DANodeStartOption) err
 
 	// if the container has already been started, we just start the container with existing settings.
 	if n.hasBeenStarted {
-		return n.startContainer(ctx)
+		return n.StartContainer(ctx)
 	}
 	return n.startAndInitialize(ctx, opts...)
 }
@@ -173,7 +175,7 @@ func (n *DANode) ModifyConfigFiles(ctx context.Context, configModifications map[
 	for filePath, modifications := range configModifications {
 		if err := ModifyConfigFile(
 			ctx,
-			n.logger,
+			n.Logger,
 			n.DockerClient,
 			n.TestName,
 			n.VolumeName,
@@ -197,12 +199,12 @@ func (n *DANode) startNode(ctx context.Context, additionalStartArgs []string, co
 		return fmt.Errorf("failed to apply config modifications: %w", err)
 	}
 
-	if err := n.containerLifecycle.StartContainer(ctx); err != nil {
+	if err := n.ContainerLifecycle.StartContainer(ctx); err != nil {
 		return fmt.Errorf("failed to start container: %w", err)
 	}
 
 	// Set the host ports once since they will not change after the container has started.
-	hostPorts, err := n.containerLifecycle.GetHostPorts(ctx, n.getRPCPort(), n.getP2PPort())
+	hostPorts, err := n.ContainerLifecycle.GetHostPorts(ctx, n.getRPCPort(), n.getP2PPort())
 	if err != nil {
 		return err
 	}
@@ -218,16 +220,16 @@ func (n *DANode) initNode(ctx context.Context, chainID string, env []string) err
 	}
 
 	// note: my_celes_key is the default key name for the da node.
-	cmd := []string{"celestia", n.nodeType.String(), "init", "--p2p.network", chainID, "--keyring.keyname", "my-key", "--node.store", n.homeDir}
-	_, _, err := n.exec(ctx, n.logger, cmd, env)
+	cmd := []string{"celestia", n.nodeType.String(), "init", "--p2p.network", chainID, "--keyring.keyname", "my-key", "--node.store", n.HomeDir()}
+	_, _, err := n.Exec(ctx, n.Logger, cmd, env)
 	return err
 }
 
 // createWallet creates a wallet for use on this node. Creating one explicitly
 // gives us access to the address for use in tests.
 func (n *DANode) createWallet(ctx context.Context) error {
-	cmd := []string{"cel-key", "add", "my-key", "--node.type", n.nodeType.String(), "--keyring-dir", path.Join(n.homeDir, "keys"), "--output", "json"}
-	_, stderr, err := n.exec(ctx, n.logger, cmd, nil)
+	cmd := []string{"cel-key", "add", "my-key", "--node.type", n.nodeType.String(), "--keyring-dir", path.Join(n.HomeDir(), "keys"), "--output", "json"}
+	_, stderr, err := n.Exec(ctx, n.Logger, cmd, nil)
 	if err != nil {
 		return fmt.Errorf("failed to create wallet: %w", err)
 	}
@@ -262,7 +264,7 @@ func (n *DANode) createNodeContainer(ctx context.Context, additionalStartArgs []
 	cmd := []string{"celestia", n.nodeType.String(), "start"}
 	cmd = append(cmd, additionalStartArgs...)
 	usingPorts := n.getPortMap() // Use configurable port map
-	return n.containerLifecycle.CreateContainer(ctx, n.TestName, n.NetworkID, n.getImage(), usingPorts, "", n.bind(), nil, n.HostName(), cmd, env, []string{})
+	return n.ContainerLifecycle.CreateContainer(ctx, n.TestName, n.NetworkID, n.getImage(), usingPorts, "", n.Bind(), nil, n.HostName(), cmd, env, []string{})
 }
 
 // initAuthToken initialises an admin auth token.
@@ -271,7 +273,7 @@ func (n *DANode) initAuthToken(ctx context.Context) error {
 	cmd := []string{"celestia", n.nodeType.String(), "auth", "admin"}
 
 	// Run the command inside the container
-	stdout, stderr, err := n.exec(ctx, n.logger, cmd, nil)
+	stdout, stderr, err := n.Exec(ctx, n.Logger, cmd, nil)
 	if err != nil {
 		return fmt.Errorf("failed to generate auth token (stderr=%q): %w", stderr, err)
 	}
@@ -305,14 +307,14 @@ func (n *DANode) getNodeConfig() *DANodeConfig {
 
 	nodeConfig, ok := configMap[n.Index]
 	if !ok {
-		n.logger.Debug("no node config found for node", zap.Int("index", n.Index), zap.String("type", n.nodeType.String()))
+		n.Logger.Debug("no node config found for node", zap.Int("index", n.Index), zap.String("type", n.nodeType.String()))
 	}
 
 	return nodeConfig
 }
 
 // getImage returns the Docker image for this node, preferring per-node config over the default image
-func (n *DANode) getImage() DockerImage {
+func (n *DANode) getImage() container.Image {
 	if nodeConfig := n.getNodeConfig(); nodeConfig != nil && nodeConfig.Image != nil {
 		return *nodeConfig.Image
 	}

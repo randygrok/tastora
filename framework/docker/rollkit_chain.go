@@ -3,6 +3,8 @@ package docker
 import (
 	"context"
 	"fmt"
+
+	"github.com/celestiaorg/tastora/framework/docker/container"
 	"github.com/celestiaorg/tastora/framework/types"
 	"go.uber.org/zap"
 )
@@ -52,12 +54,12 @@ func newRollkitNode(
 	ctx context.Context,
 	cfg Config,
 	testName string,
-	image DockerImage,
+	image container.Image,
 	index int,
 ) (*RollkitNode, error) {
 	rn := NewRollkitNode(cfg, testName, image, index)
 
-	if err := rn.createAndSetupVolume(ctx, rn.Name()); err != nil {
+	if err := rn.CreateAndSetupVolume(ctx, rn.Name()); err != nil {
 		return nil, err
 	}
 

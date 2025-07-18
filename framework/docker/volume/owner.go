@@ -1,4 +1,4 @@
-package docker
+package volume
 
 import (
 	"context"
@@ -13,20 +13,18 @@ import (
 	"go.uber.org/zap"
 )
 
-// VolumeOwnerOptions contain the configuration for the SetVolumeOwner function.
-type VolumeOwnerOptions struct {
-	Log *zap.Logger
-
-	Client *client.Client
-
+// OwnerOptions contain the configuration for the SetOwner function.
+type OwnerOptions struct {
+	Log        *zap.Logger
+	Client     *client.Client
 	VolumeName string
 	ImageRef   string
 	TestName   string
 	UidGid     string //nolint: stylecheck
 }
 
-// SetVolumeOwner configures the owner of a volume to match the default user in the supplied image reference.
-func SetVolumeOwner(ctx context.Context, opts VolumeOwnerOptions) error {
+// SetOwner configures the owner of a volume to match the default user in the supplied image reference.
+func SetOwner(ctx context.Context, opts OwnerOptions) error {
 	owner := opts.UidGid
 	if owner == "" {
 		owner = consts.UserRootString

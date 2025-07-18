@@ -2,6 +2,7 @@ package docker
 
 import (
 	"context"
+	"github.com/celestiaorg/tastora/framework/docker/container"
 	"github.com/cosmos/cosmos-sdk/types/module/testutil"
 	"github.com/moby/moby/client"
 	"go.uber.org/zap"
@@ -29,7 +30,7 @@ type ChainConfig struct {
 	// Chain ID, e.g. cosmoshub-4
 	ChainID string
 	// Docker image for running chain nodes.
-	Image DockerImage
+	Image container.Image
 	// Binary to execute for the chain node daemon.
 	Bin string
 	// Bech32 prefix for chain addresses, e.g. cosmos.
@@ -67,7 +68,7 @@ type DataAvailabilityNetworkConfig struct {
 	// LightNodeCount specifies the number of light nodes to deploy in the data availability network.
 	LightNodeCount int
 	// Image specifies the Docker image used for nodes in the data availability network.
-	Image DockerImage
+	Image container.Image
 	// BridgeNodeConfigs allows per-bridge-node configuration overrides, keyed by bridge node index
 	BridgeNodeConfigs map[int]*DANodeConfig
 	// FullNodeConfigs allows per-full-node configuration overrides, keyed by full node index
@@ -85,7 +86,7 @@ type DataAvailabilityNetworkConfig struct {
 // DANodeConfig provides per-node configuration that can override DataAvailabilityNetworkConfig defaults
 type DANodeConfig struct {
 	// Image overrides the network-level Image for this specific node
-	Image *DockerImage
+	Image *container.Image
 
 	RPCPort      string // Internal RPC port (overrides default)
 	P2PPort      string // Internal P2P port (overrides default)
@@ -107,5 +108,6 @@ type RollkitChainConfig struct {
 	// NumNodes
 	NumNodes int
 	// Image specifies the Docker image used for the rollkit nodes.
-	Image DockerImage
+	Image container.Image
 }
+

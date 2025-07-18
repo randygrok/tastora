@@ -1,26 +1,8 @@
-package docker
+package internal
 
 import (
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/go-connections/nat"
-	"net"
 	"regexp"
 )
-
-// GetHostPort returns a resource's published port with an address.
-// cont is the type returned by the Docker client's ContainerInspect method.
-func GetHostPort(cont container.InspectResponse, portID string) string {
-	if cont.NetworkSettings == nil {
-		return ""
-	}
-
-	m, ok := cont.NetworkSettings.Ports[nat.Port(portID)]
-	if !ok || len(m) == 0 {
-		return ""
-	}
-
-	return net.JoinHostPort(m[0].HostIP, m[0].HostPort)
-}
 
 // CondenseHostName truncates the middle of the given name
 // if it is 64 characters or longer.

@@ -11,14 +11,13 @@ import (
 	"github.com/celestiaorg/tastora/framework/testutil/wait"
 	"github.com/celestiaorg/tastora/framework/types"
 	sdktx "github.com/cosmos/cosmos-sdk/client/tx"
+	"go.uber.org/zap"
 	"path"
 	"reflect"
-	"testing"
 	"time"
 
 	"github.com/cosmos/cosmos-sdk/client"
 	"github.com/cosmos/cosmos-sdk/client/flags"
-	"github.com/cosmos/cosmos-sdk/client/tx"
 	"github.com/cosmos/cosmos-sdk/crypto/keyring"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/cosmos/cosmos-sdk/types/tx/signing"
@@ -27,7 +26,7 @@ import (
 
 type ClientContextOpt func(clientContext client.Context) client.Context
 
-type FactoryOpt func(factory tx.Factory) tx.Factory
+type FactoryOpt func(factory sdktx.Factory) sdktx.Factory
 
 // broadcaster is responsible for broadcasting trasactions to docker chains.
 type broadcaster struct {
@@ -39,8 +38,8 @@ type broadcaster struct {
 
 	// chain is a reference to the Chain instance which will be the target of the messages.
 	chain *Chain
-	// t is the testing.T for the current test.
-	t *testing.T
+	// node is the specific node to broadcast through (defaults to chain.GetNode() if nil)
+	node *ChainNode
 
 	// factoryOptions is a slice of broadcast.FactoryOpt which enables arbitrary configuration of the tx.Factory.
 	factoryOptions []FactoryOpt
@@ -50,12 +49,15 @@ type broadcaster struct {
 
 // newBroadcaster returns an instance of Broadcaster which can be used with broadcast.Tx to
 // broadcast messages sdk messages.
-func newBroadcaster(t *testing.T, chain *Chain) types.Broadcaster {
-	t.Helper()
+func newBroadcaster(chain *Chain) types.Broadcaster {
+	return newBroadcasterForNode(chain, nil)
+}
 
+// newBroadcasterForNode returns an instance of Broadcaster that broadcasts through a specific node.
+func newBroadcasterForNode(chain *Chain, node *ChainNode) types.Broadcaster {
 	return &broadcaster{
-		t:        t,
 		chain:    chain,
+		node:     node,
 		buf:      &bytes.Buffer{},
 		keyrings: map[types.Wallet]keyring.Keyring{},
 	}
@@ -76,20 +78,20 @@ func (b *broadcaster) ConfigureClientContextOptions(opts ...ClientContextOpt) {
 // GetFactory returns an instance of tx.Factory that is configured with this Broadcaster's Chain
 // and the provided wallet. ConfigureFactoryOptions can be used to specify arbitrary options to configure the returned
 // factory.
-func (b *broadcaster) GetFactory(ctx context.Context, wallet types.Wallet) (tx.Factory, error) {
+func (b *broadcaster) GetFactory(ctx context.Context, wallet types.Wallet) (sdktx.Factory, error) {
 	clientContext, err := b.GetClientContext(ctx, wallet)
 	if err != nil {
-		return tx.Factory{}, err
+		return sdktx.Factory{}, err
 	}
 
 	sdkAdd, err := sdkacc.AddressFromWallet(wallet)
 	if err != nil {
-		return tx.Factory{}, err
+		return sdktx.Factory{}, err
 	}
 
 	account, err := clientContext.AccountRetriever.GetAccount(clientContext, sdkAdd)
 	if err != nil {
-		return tx.Factory{}, err
+		return sdktx.Factory{}, err
 	}
 
 	f := b.defaultTxFactory(clientContext, account)
@@ -103,13 +105,12 @@ func (b *broadcaster) GetFactory(ctx context.Context, wallet types.Wallet) (tx.F
 // the provided wallet. ConfigureClientContextOptions can be used to configure arbitrary options to configure the returned
 // client.Context.
 func (b *broadcaster) GetClientContext(ctx context.Context, wallet types.Wallet) (client.Context, error) {
-	chain := b.chain
-	cn := chain.GetNode()
+	cn := b.getNode()
 
 	_, ok := b.keyrings[wallet]
 	if !ok {
-		containerKeyringDir := path.Join(cn.homeDir, "keyring-test")
-		kr := dockerinternal.NewDockerKeyring(cn.DockerClient, cn.containerLifecycle.ContainerID(), containerKeyringDir, cn.cfg.ChainConfig.EncodingConfig.Codec)
+		containerKeyringDir := path.Join(cn.HomeDir(), "keyring-test")
+		kr := dockerinternal.NewDockerKeyring(cn.DockerClient, cn.ContainerLifecycle.ContainerID(), containerKeyringDir, cn.EncodingConfig.Codec)
 		b.keyrings[wallet] = kr
 	}
 
@@ -152,12 +153,20 @@ func (b *broadcaster) UnmarshalTxResponseBytes(ctx context.Context, bytes []byte
 	return resp, nil
 }
 
+// getNode returns the node to use for broadcasting (specific node or chain default).
+func (b *broadcaster) getNode() *ChainNode {
+	if b.node != nil {
+		return b.node
+	}
+	return b.chain.GetNode()
+}
+
 // defaultClientContext returns a default client context configured with the wallet as the sender.
 func (b *broadcaster) defaultClientContext(fromWallet types.Wallet, sdkAdd sdk.AccAddress) client.Context {
 	// initialize a clean buffer each time
 	b.buf.Reset()
 	kr := b.keyrings[fromWallet]
-	cn := b.chain.GetNode()
+	cn := b.getNode()
 	return cn.CliContext().
 		WithOutput(b.buf).
 		WithFrom(fromWallet.GetFormattedAddress()).
@@ -171,9 +180,9 @@ func (b *broadcaster) defaultClientContext(fromWallet types.Wallet, sdkAdd sdk.A
 }
 
 // defaultTxFactory creates a new Factory with default configuration.
-func (b *broadcaster) defaultTxFactory(clientCtx client.Context, account client.Account) tx.Factory {
+func (b *broadcaster) defaultTxFactory(clientCtx client.Context, account client.Account) sdktx.Factory {
 	chainConfig := b.chain.cfg.ChainConfig
-	return tx.Factory{}.
+	return sdktx.Factory{}.
 		WithAccountNumber(account.GetAccountNumber()).
 		WithSequence(account.GetSequence()).
 		WithSignMode(signing.SignMode_SIGN_MODE_DIRECT).
@@ -247,7 +256,7 @@ func (b *broadcaster) BroadcastMessages(ctx context.Context, signingWallet types
 		return sdk.TxResponse{}, err
 	}
 
-	if err := tx.BroadcastTx(cc, f, msgs...); err != nil {
+	if err := sdktx.BroadcastTx(cc, f, msgs...); err != nil {
 		return sdk.TxResponse{}, err
 	}
 
@@ -277,7 +286,11 @@ func (b *broadcaster) BroadcastMessages(ctx context.Context, signingWallet types
 		msgType := reflect.TypeOf(msg).Elem().Name()
 		msgTypes = append(msgTypes, msgType)
 	}
-	b.t.Logf("broadcasted msg from wallet address %s; message types: %s; tx hash: %s", signingWallet.GetFormattedAddress(), msgTypes, respWithTxHash.TxHash)
+
+	b.chain.log.Info("broadcasted message",
+		zap.String("wallet_address", signingWallet.GetFormattedAddress()),
+		zap.Strings("message_types", msgTypes),
+		zap.String("tx_hash", respWithTxHash.TxHash))
 
 	return getFullyPopulatedResponse(ctx, cc, respWithTxHash.TxHash)
 }

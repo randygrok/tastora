@@ -8,17 +8,11 @@ import (
 	"github.com/celestiaorg/go-square/v2/share"
 	"github.com/celestiaorg/tastora/framework/docker/consts"
 	addressutil "github.com/celestiaorg/tastora/framework/testutil/address"
-	"github.com/celestiaorg/tastora/framework/testutil/toml"
 	"github.com/celestiaorg/tastora/framework/testutil/wait"
 	"github.com/celestiaorg/tastora/framework/types"
 	"github.com/cosmos/cosmos-sdk/codec"
-	codectypes "github.com/cosmos/cosmos-sdk/codec/types"
-	cryptocodec "github.com/cosmos/cosmos-sdk/crypto/codec"
-	"github.com/cosmos/cosmos-sdk/crypto/keyring"
 	sdk "github.com/cosmos/cosmos-sdk/types"
-	sdktypes "github.com/cosmos/cosmos-sdk/types"
 	dockerimagetypes "github.com/docker/docker/api/types/image"
-	volumetypes "github.com/docker/docker/api/types/volume"
 	"github.com/docker/go-connections/nat"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -29,11 +23,6 @@ import (
 
 var _ types.Chain = &Chain{}
 
-const (
-	defaultNumValidators = 2
-	defaultNumFullNodes  = 1
-)
-
 var sentryPorts = nat.PortMap{
 	nat.Port(p2pPort):     {},
 	nat.Port(rpcPort):     {},
@@ -42,62 +31,42 @@ var sentryPorts = nat.PortMap{
 	nat.Port(privValPort): {},
 }
 
-func newChain(ctx context.Context, t *testing.T, cfg Config) (types.Chain, error) {
-	if cfg.ChainConfig == nil {
-		return nil, fmt.Errorf("chain config must be set")
-	}
-	if cfg.ChainConfig.EncodingConfig == nil {
-		return nil, fmt.Errorf("chain config must have an encoding config set")
-	}
+// NodeType represents the type of blockchain node
+type NodeType int
 
-	registry := codectypes.NewInterfaceRegistry()
-	cryptocodec.RegisterInterfaces(registry)
-	cdc := codec.NewProtoCodec(registry)
-	kr := keyring.NewInMemory(cdc)
-
-	// If unspecified, NumValidators defaults to 2 and NumFullNodes defaults to 1.
-	if cfg.ChainConfig.NumValidators == nil {
-		nv := defaultNumValidators
-		cfg.ChainConfig.NumValidators = &nv
-	}
-	if cfg.ChainConfig.NumFullNodes == nil {
-		nf := defaultNumFullNodes
-		cfg.ChainConfig.NumFullNodes = &nf
-	}
-
-	c := &Chain{
-		t:       t,
-		cfg:     cfg,
-		cdc:     cdc,
-		keyring: kr,
-		log:     cfg.Logger,
-	}
-
-	// create the underlying docker resources for the chain.
-	if err := c.initializeChainNodes(ctx, c.t.Name()); err != nil {
-		return nil, err
-	}
-
-	return c, nil
-}
+const (
+	ValidatorNodeType NodeType = iota
+	FullNodeType
+)
 
 type Chain struct {
-	t            *testing.T
-	cfg          Config
-	Validators   ChainNodes
-	FullNodes    ChainNodes
-	numFullNodes int
-	cdc          *codec.ProtoCodec
-	log          *zap.Logger
-	keyring      keyring.Keyring
-	findTxMu     sync.Mutex
+	t          *testing.T
+	cfg        Config
+	Validators ChainNodes
+	FullNodes  ChainNodes
+	cdc        *codec.ProtoCodec
+	log        *zap.Logger
+
+	mu          sync.Mutex
+	broadcaster types.Broadcaster
+
 	faucetWallet types.Wallet
-	broadcaster  types.Broadcaster
 
 	// started is a bool indicating if the Chain has been started or not.
 	// it is used to determine if files should be initialized at startup or
 	// if the nodes should just be started.
 	started bool
+}
+
+func (c *Chain) GetRelayerConfig() types.ChainRelayerConfig {
+	return types.ChainRelayerConfig{
+		ChainID:      c.GetChainID(),
+		Denom:        c.cfg.ChainConfig.Denom,
+		GasPrices:    c.cfg.ChainConfig.GasPrices,
+		Bech32Prefix: c.cfg.ChainConfig.Bech32Prefix,
+		RPCAddress:   "http://" + c.GetNode().Name() + ":26657",
+		GRPCAddress:  "http://" + c.GetNode().Name() + ":9090",
+	}
 }
 
 // GetFaucetWallet retrieves the faucet wallet for the chain.
@@ -115,14 +84,14 @@ func (c *Chain) getBroadcaster() types.Broadcaster {
 	if c.broadcaster != nil {
 		return c.broadcaster
 	}
-	c.broadcaster = newBroadcaster(c.t, c)
+	c.broadcaster = newBroadcaster(c)
 	return c.broadcaster
 }
 
 // BroadcastMessages broadcasts the given messages signed on behalf of the provided user.
-func (c *Chain) BroadcastMessages(ctx context.Context, signingWallet types.Wallet, msgs ...sdktypes.Msg) (sdktypes.TxResponse, error) {
-	if c.faucetWallet.GetFormattedAddress() == "" {
-		return sdktypes.TxResponse{}, fmt.Errorf("faucet wallet not initialized")
+func (c *Chain) BroadcastMessages(ctx context.Context, signingWallet types.Wallet, msgs ...sdk.Msg) (sdk.TxResponse, error) {
+	if c.GetFaucetWallet() == nil {
+		return sdk.TxResponse{}, fmt.Errorf("faucet wallet not initialized")
 	}
 	return c.getBroadcaster().BroadcastMessages(ctx, signingWallet, msgs...)
 }
@@ -133,73 +102,68 @@ func (c *Chain) BroadcastBlobMessage(ctx context.Context, signingWallet types.Wa
 	return c.getBroadcaster().BroadcastBlobMessage(ctx, signingWallet, msg, blobs...)
 }
 
-func (c *Chain) AddNode(ctx context.Context, overrides map[string]any) error {
-	return c.AddFullNodes(ctx, overrides, 1)
-}
-
-// AddFullNodes adds new fullnodes to the network, peering with the existing nodes.
-func (c *Chain) AddFullNodes(ctx context.Context, configFileOverrides map[string]any, inc int) error {
-	// Get peer string for existing nodes
-
-	var peerAddressers []addressutil.PeerAddresser
-	for _, n := range c.Nodes() {
-		peerAddressers = append(peerAddressers, n)
+// AddNode adds a single full node to the chain with the given configuration
+func (c *Chain) AddNode(ctx context.Context, nodeConfig ChainNodeConfig) error {
+	if nodeConfig.nodeType != FullNodeType {
+		// TODO: this is preserving existing functionality, we can update this to support addition of validator nodes.
+		return fmt.Errorf("node type must be FullNodeType")
 	}
 
-	peers, err := addressutil.BuildInternalPeerAddressList(ctx, peerAddressers)
-	if err != nil {
-		return err
-	}
-
-	// Get genesis.json
+	// get genesis.json
 	genbz, err := c.Validators[0].genesisFileContent(ctx)
 	if err != nil {
 		return err
 	}
 
-	prevCount := c.numFullNodes
-	c.numFullNodes += inc
-	if err := c.initializeChainNodes(ctx, c.t.Name()); err != nil {
+	// create a builder to access newChainNode method
+	builder := NewChainBuilderFromChain(c)
+
+	existingNodeCount := len(c.Nodes())
+
+	// create the node directly using builder's newChainNode method
+	node, err := builder.newChainNode(ctx, nodeConfig, existingNodeCount)
+	if err != nil {
 		return err
 	}
 
-	var eg errgroup.Group
-	for i := prevCount; i < c.numFullNodes; i++ {
-		eg.Go(func() error {
-			fn := c.FullNodes[i]
-			if err := fn.initFullNodeFiles(ctx); err != nil {
-				return err
-			}
-			if err := fn.setPeers(ctx, peers); err != nil {
-				return err
-			}
-			if err := fn.overwriteGenesisFile(ctx, genbz); err != nil {
-				return err
-			}
-			for configFile, modifiedConfig := range configFileOverrides {
-				modifiedToml, ok := modifiedConfig.(toml.Toml)
-				if !ok {
-					return fmt.Errorf("provided toml override for file %s is of type (%T). Expected (DecodedToml)", configFile, modifiedConfig)
-				}
-				if err := ModifyConfigFile(
-					ctx,
-					fn.logger(),
-					fn.DockerClient,
-					fn.TestName,
-					fn.VolumeName,
-					configFile,
-					modifiedToml,
-				); err != nil {
-					return err
-				}
-			}
-			if err := fn.createNodeContainer(ctx); err != nil {
-				return err
-			}
-			return fn.startContainer(ctx)
-		})
+	if err := node.initNodeFiles(ctx); err != nil {
+		return err
 	}
-	return eg.Wait()
+
+	peers, err := addressutil.BuildInternalPeerAddressList(ctx, c.Nodes())
+	if err != nil {
+		return err
+	}
+
+	if err := node.setPeers(ctx, peers); err != nil {
+		return err
+	}
+
+	if err := node.overwriteGenesisFile(ctx, genbz); err != nil {
+		return err
+	}
+
+	// execute any custom post-init functions
+	// these can modify config files or modify genesis etc.
+	for _, fn := range node.PostInit {
+		if err := fn(ctx, node); err != nil {
+			return err
+		}
+	}
+
+	if err := node.createNodeContainer(ctx); err != nil {
+		return err
+	}
+	if err := node.startContainer(ctx); err != nil {
+		return err
+	}
+
+	// add the new node to the chain
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.FullNodes = append(c.FullNodes, node)
+
+	return nil
 }
 
 func (c *Chain) GetNodes() []types.ChainNode {
@@ -238,73 +202,32 @@ func (c *Chain) Start(ctx context.Context) error {
 
 // startAndInitializeNodes initializes and starts all chain nodes, configures genesis files, and ensures proper setup for the chain.
 func (c *Chain) startAndInitializeNodes(ctx context.Context) error {
-	cfg := c.cfg
 	c.started = true
-
-	genesisAmounts := make([][]sdk.Coin, len(c.Validators))
-	genesisSelfDelegation := make([]sdk.Coin, len(c.Validators))
-
-	for i := range c.Validators {
-		genesisAmounts[i] = []sdk.Coin{{Amount: sdkmath.NewInt(10_000_000_000_000), Denom: cfg.ChainConfig.Denom}}
-		genesisSelfDelegation[i] = sdk.Coin{Amount: sdkmath.NewInt(5_000_000), Denom: cfg.ChainConfig.Denom}
-	}
-
-	configFileOverrides := cfg.ChainConfig.ConfigFileOverrides
+	defaultGenesisAmount := sdk.NewCoins(sdk.NewCoin(c.cfg.ChainConfig.Denom, sdkmath.NewInt(10_000_000_000_000)))
+	defaultGenesisSelfDelegation := sdk.NewCoin(c.cfg.ChainConfig.Denom, sdkmath.NewInt(5_000_000))
 
 	eg := new(errgroup.Group)
-	// Initialize config and sign gentx for each validator.
-	for i, v := range c.Validators {
+	// initialize config and sign gentx for each validator.
+	for _, v := range c.Validators {
 		v.Validator = true
 		eg.Go(func() error {
-			if err := v.initFullNodeFiles(ctx); err != nil {
+			if err := v.initNodeFiles(ctx); err != nil {
 				return err
 			}
-			for configFile, modifiedConfig := range configFileOverrides {
-				modifiedToml, ok := modifiedConfig.(toml.Toml)
-				if !ok {
-					return fmt.Errorf("provided toml override for file %s is of type (%T). Expected (DecodedToml)", configFile, modifiedConfig)
-				}
-				if err := ModifyConfigFile(
-					ctx,
-					c.cfg.Logger,
-					v.DockerClient,
-					v.TestName,
-					v.VolumeName,
-					configFile,
-					modifiedToml,
-				); err != nil {
-					return fmt.Errorf("failed to modify toml config file: %w", err)
-				}
+
+			// we don't want to initialize the validator if it has a keyring.
+			if v.GenesisKeyring != nil {
+				return nil
 			}
-			return v.initValidatorGenTx(ctx, genesisAmounts[i], genesisSelfDelegation[i])
+
+			return v.initValidatorGenTx(ctx, defaultGenesisAmount, defaultGenesisSelfDelegation)
 		})
 	}
-
-	// Initialize config for each full node.
+	// initialize config for each full node.
 	for _, n := range c.FullNodes {
 		n.Validator = false
 		eg.Go(func() error {
-			if err := n.initFullNodeFiles(ctx); err != nil {
-				return err
-			}
-			for configFile, modifiedConfig := range configFileOverrides {
-				modifiedToml, ok := modifiedConfig.(toml.Toml)
-				if !ok {
-					return fmt.Errorf("provided toml override for file %s is of type (%T). Expected (DecodedToml)", configFile, modifiedConfig)
-				}
-				if err := ModifyConfigFile(
-					ctx,
-					n.logger(),
-					n.DockerClient,
-					n.TestName,
-					n.VolumeName,
-					configFile,
-					modifiedToml,
-				); err != nil {
-					return err
-				}
-			}
-			return nil
+			return n.initNodeFiles(ctx)
 		})
 	}
 
@@ -313,60 +236,43 @@ func (c *Chain) startAndInitializeNodes(ctx context.Context) error {
 		return err
 	}
 
-	// for the validators we need to collect the gentxs and the accounts
-	// to the first node's genesis file
-	validator0 := c.Validators[0]
-	for i := 1; i < len(c.Validators); i++ {
-		validatorN := c.Validators[i]
-
-		bech32, err := validatorN.accountKeyBech32(ctx, valKey)
-		if err != nil {
-			return err
-		}
-
-		if err := validator0.addGenesisAccount(ctx, bech32, genesisAmounts[0]); err != nil {
-			return err
-		}
-
-		if err := validatorN.copyGentx(ctx, validator0); err != nil {
-			return err
-		}
-	}
-
-	// create the faucet wallet, this can be used to fund new wallets in the tests.
-	wallet, err := c.CreateWallet(ctx, consts.FaucetAccountKeyName)
-	if err != nil {
-		return fmt.Errorf("failed to create faucet wallet: %w", err)
-	}
-	c.faucetWallet = wallet
-
-	if err := validator0.addGenesisAccount(ctx, wallet.GetFormattedAddress(), []sdk.Coin{{Denom: c.cfg.ChainConfig.Denom, Amount: sdkmath.NewInt(10_000_000_000_000)}}); err != nil {
-		return err
-	}
-
-	if err := validator0.collectGentxs(ctx); err != nil {
-		return err
-	}
-
-	genbz, err := validator0.genesisFileContent(ctx)
-	if err != nil {
-		return err
-	}
-
-	genbz = bytes.ReplaceAll(genbz, []byte(`"stake"`), []byte(fmt.Sprintf(`"%s"`, cfg.ChainConfig.Denom)))
-
-	if c.cfg.ChainConfig.ModifyGenesis != nil {
-		genbz, err = c.cfg.ChainConfig.ModifyGenesis(cfg, genbz)
+	var finalGenesisBz []byte
+	// only perform initial genesis and faucet account creation if no genesis keyring is provided.
+	if c.Validators[0].GenesisKeyring == nil {
+		var err error
+		finalGenesisBz, err = c.initDefaultGenesis(ctx, defaultGenesisAmount)
 		if err != nil {
 			return err
 		}
 	}
 
 	chainNodes := c.Nodes()
-
 	for _, cn := range chainNodes {
-		if err := cn.overwriteGenesisFile(ctx, genbz); err != nil {
+		// test case is explicitly setting genesis bytes.
+		if c.cfg.ChainConfig.GenesisFileBz != nil {
+			finalGenesisBz = c.cfg.ChainConfig.GenesisFileBz
+		}
+
+		if err := cn.overwriteGenesisFile(ctx, finalGenesisBz); err != nil {
 			return err
+		}
+
+		// test case has explicitly set a priv_validator_key.json contents.
+		if cn.PrivValidatorKey != nil {
+			if err := cn.overwritePrivValidatorKey(ctx, cn.PrivValidatorKey); err != nil {
+				return err
+			}
+		}
+	}
+
+	// for all chain nodes, execute any functions provided.
+	// these can do things like override config files or make any other modifications
+	// before the chain node starts.
+	for _, cn := range chainNodes {
+		for _, fn := range cn.PostInit {
+			if err := fn(ctx, cn); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -380,12 +286,7 @@ func (c *Chain) startAndInitializeNodes(ctx context.Context) error {
 		return err
 	}
 
-	peerAddressers := make([]addressutil.PeerAddresser, len(chainNodes))
-	for i, n := range chainNodes {
-		peerAddressers[i] = n
-	}
-
-	peers, err := addressutil.BuildInternalPeerAddressList(ctx, peerAddressers)
+	peers, err := addressutil.BuildInternalPeerAddressList(ctx, chainNodes)
 	if err != nil {
 		return err
 	}
@@ -405,7 +306,68 @@ func (c *Chain) startAndInitializeNodes(ctx context.Context) error {
 	}
 
 	// Wait for blocks before considering the chains "started"
-	return wait.ForBlocks(ctx, 2, c.GetNode())
+	if err := wait.ForBlocks(ctx, 2, c.GetNode()); err != nil {
+		return err
+	}
+
+	// copy faucet key to all other validators now that containers are running.
+	// this ensures the faucet wallet can be used on all nodes.
+	// since the faucet wallet is only created if a genesis keyring is not provided, we only copy it over if that's the case.
+	if c.Validators[0].GenesisKeyring == nil {
+		c.Validators[0].faucetWallet = c.GetFaucetWallet()
+		for i := 1; i < len(c.Validators); i++ {
+			if err := c.copyFaucetKeyToValidator(c.GetFaucetWallet(), c.Validators[i]); err != nil {
+				return fmt.Errorf("failed to copy faucet key to validator %d: %w", i, err)
+			}
+			c.Validators[i].faucetWallet = c.Validators[0].faucetWallet
+		}
+	}
+
+	return nil
+}
+
+// initDefaultGenesis initializes the default genesis file with validators and a faucet account for funding test wallets.
+// it distributes the default genesis amount to all validators and ensures gentx files are collected and included.
+func (c *Chain) initDefaultGenesis(ctx context.Context, defaultGenesisAmount sdk.Coins) ([]byte, error) {
+	validator0 := c.Validators[0]
+	for i := 1; i < len(c.Validators); i++ {
+		validatorN := c.Validators[i]
+
+		bech32, err := validatorN.accountKeyBech32(ctx, valKey)
+		if err != nil {
+			return nil, err
+		}
+
+		if err := validator0.addGenesisAccount(ctx, bech32, defaultGenesisAmount); err != nil {
+			return nil, err
+		}
+
+		if err := validatorN.copyGentx(ctx, validator0); err != nil {
+			return nil, err
+		}
+	}
+
+	// create the faucet wallet, this can be used to fund new wallets in the tests.
+	wallet, err := c.CreateWallet(ctx, consts.FaucetAccountKeyName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create faucet wallet: %w", err)
+	}
+	c.faucetWallet = wallet
+
+	if err := validator0.addGenesisAccount(ctx, wallet.GetFormattedAddress(), []sdk.Coin{{Denom: c.cfg.ChainConfig.Denom, Amount: sdkmath.NewInt(10_000_000_000_000)}}); err != nil {
+		return nil, err
+	}
+
+	if err := validator0.collectGentxs(ctx); err != nil {
+		return nil, err
+	}
+
+	genbz, err := validator0.genesisFileContent(ctx)
+	if err != nil {
+		return nil, err
+	}
+	genbz = bytes.ReplaceAll(genbz, []byte(`"stake"`), []byte(fmt.Sprintf(`"%s"`, c.cfg.ChainConfig.Denom)))
+	return genbz, nil
 }
 
 func (c *Chain) GetNode() *ChainNode {
@@ -421,8 +383,8 @@ func (c *Chain) Nodes() ChainNodes {
 // Should only be used if the chain has previously been started with .Start.
 func (c *Chain) startAllNodes(ctx context.Context) error {
 	// prevent client calls during this time
-	c.findTxMu.Lock()
-	defer c.findTxMu.Unlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	var eg errgroup.Group
 	for _, n := range c.Nodes() {
 		eg.Go(func() error {
@@ -442,7 +404,7 @@ func (c *Chain) Stop(ctx context.Context) error {
 			if err := n.stop(ctx); err != nil {
 				return err
 			}
-			return n.removeContainer(ctx)
+			return n.RemoveContainer(ctx)
 		})
 	}
 	return eg.Wait()
@@ -450,7 +412,7 @@ func (c *Chain) Stop(ctx context.Context) error {
 
 // UpgradeVersion updates the chain's version across all components, including validators and full nodes, and pulls new images.
 func (c *Chain) UpgradeVersion(ctx context.Context, version string) {
-	c.cfg.ChainConfig.Images[0].Version = version
+	c.cfg.ChainConfig.Image.Version = version
 	for _, n := range c.Validators {
 		n.Image.Version = version
 	}
@@ -460,99 +422,19 @@ func (c *Chain) UpgradeVersion(ctx context.Context, version string) {
 	c.pullImages(ctx)
 }
 
-// creates the test node objects required for bootstrapping tests.
-func (c *Chain) initializeChainNodes(
-	ctx context.Context,
-	testName string,
-) error {
-
-	numValidators := *c.cfg.ChainConfig.NumValidators
-
-	chainCfg := c.cfg
-	c.pullImages(ctx)
-	image := chainCfg.ChainConfig.Images[0]
-
-	newVals := make(ChainNodes, numValidators)
-	copy(newVals, c.Validators)
-	newFullNodes := make(ChainNodes, c.numFullNodes)
-	copy(newFullNodes, c.FullNodes)
-
-	eg, egCtx := errgroup.WithContext(ctx)
-	for i := len(c.Validators); i < numValidators; i++ {
-		eg.Go(func() error {
-			val, err := c.newChainNode(egCtx, testName, image, true, i)
-			if err != nil {
-				return err
-			}
-			newVals[i] = val
-			return nil
-		})
-	}
-	for i := len(c.FullNodes); i < c.numFullNodes; i++ {
-		eg.Go(func() error {
-			fn, err := c.newChainNode(egCtx, testName, image, false, i)
-			if err != nil {
-				return err
-			}
-			newFullNodes[i] = fn
-			return nil
-		})
-	}
-	if err := eg.Wait(); err != nil {
-		return err
-	}
-	c.findTxMu.Lock()
-	defer c.findTxMu.Unlock()
-	c.Validators = newVals
-	c.FullNodes = newFullNodes
-	return nil
-}
-
-// newChainNode constructs a new cosmos chain node with a docker volume.
-func (c *Chain) newChainNode(
-	ctx context.Context,
-	testName string,
-	image DockerImage,
-	validator bool,
-	index int,
-) (*ChainNode, error) {
-	// Construct the ChainNode first so we can access its name.
-	// The ChainNode's VolumeName cannot be set until after we create the volume.
-	tn := NewDockerChainNode(c.log, validator, c.cfg, testName, image, index)
-
-	v, err := c.cfg.DockerClient.VolumeCreate(ctx, volumetypes.CreateOptions{
-		Labels: map[string]string{
-			consts.CleanupLabel:   testName,
-			consts.NodeOwnerLabel: tn.Name(),
-		},
-	})
-	if err != nil {
-		return nil, fmt.Errorf("creating volume for chain node: %w", err)
-	}
-	tn.VolumeName = v.Name
-
-	if err := SetVolumeOwner(ctx, VolumeOwnerOptions{
-		Log:        c.log,
-		Client:     c.cfg.DockerClient,
-		VolumeName: v.Name,
-		ImageRef:   image.Ref(),
-		TestName:   testName,
-		UidGid:     image.UIDGID,
-	}); err != nil {
-		return nil, fmt.Errorf("set volume owner: %w", err)
-	}
-
-	return tn, nil
-}
-
+// pullImages pulls all images used by the chain chains.
 func (c *Chain) pullImages(ctx context.Context) {
-	for _, image := range c.cfg.ChainConfig.Images {
-		if image.Version == "local" {
+	pulled := make(map[string]struct{})
+	for _, n := range c.Nodes() {
+		image := n.Image
+		if _, ok := pulled[image.Ref()]; ok {
 			continue
 		}
+
+		pulled[image.Ref()] = struct{}{}
 		rc, err := c.cfg.DockerClient.ImagePull(
 			ctx,
-			image.Repository+":"+image.Version,
+			image.Ref(),
 			dockerimagetypes.PullOptions{},
 		)
 		if err != nil {
@@ -568,31 +450,37 @@ func (c *Chain) pullImages(ctx context.Context) {
 	}
 }
 
-// CreateWallet will creates a new wallet.
+// CreateWallet creates a new wallet using Validator[0] to maintain backward compatibility.
 func (c *Chain) CreateWallet(ctx context.Context, keyName string) (types.Wallet, error) {
-	if err := c.createKey(ctx, keyName); err != nil {
-		return nil, fmt.Errorf("failed to create key with name %q on chain %s: %w", keyName, c.cfg.ChainConfig.Name, err)
-	}
-
-	addrBytes, err := c.getAddress(ctx, keyName)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get account address for key %q on chain %s: %w", keyName, c.cfg.ChainConfig.Name, err)
-	}
-
-	formattedAddres := sdktypes.MustBech32ifyAddressBytes(c.cfg.ChainConfig.Bech32Prefix, addrBytes)
-
-	w := NewWallet(addrBytes, formattedAddres, c.cfg.ChainConfig.Bech32Prefix, keyName)
-	return &w, nil
+	return c.GetNode().CreateWallet(ctx, keyName, c.cfg.ChainConfig.Bech32Prefix)
 }
 
-func (c *Chain) createKey(ctx context.Context, keyName string) error {
-	return c.GetNode().createKey(ctx, keyName)
-}
+// copyFaucetKeyToValidator copies the faucet key from validator[0] to the specified validator.
+func (c *Chain) copyFaucetKeyToValidator(faucetWallet types.Wallet, targetValidator *ChainNode) error {
+	faucetKeyName := faucetWallet.GetKeyName()
 
-func (c *Chain) getAddress(ctx context.Context, keyName string) ([]byte, error) {
-	b32Addr, err := c.GetNode().accountKeyBech32(ctx, keyName)
+	// as part of setup, the faucet wallet was created on Validators[0]
+	sourceKeyring, err := c.Validators[0].GetKeyring()
 	if err != nil {
-		return nil, err
+		return fmt.Errorf("failed to get source keyring: %w", err)
 	}
-	return sdk.GetFromBech32(b32Addr, c.cfg.ChainConfig.Bech32Prefix)
+
+	// get the keyring from target validator
+	targetKeyring, err := targetValidator.GetKeyring()
+	if err != nil {
+		return fmt.Errorf("failed to get target keyring: %w", err)
+	}
+
+	// export the key from source
+	armoredKey, err := sourceKeyring.ExportPrivKeyArmor(faucetKeyName, "")
+	if err != nil {
+		return fmt.Errorf("failed to export faucet key: %w", err)
+	}
+
+	// import the key to target
+	if err := targetKeyring.ImportPrivKey(faucetKeyName, armoredKey, ""); err != nil {
+		return fmt.Errorf("failed to import faucet key: %w", err)
+	}
+
+	return nil
 }

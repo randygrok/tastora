@@ -4,29 +4,28 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/celestiaorg/tastora/framework/docker/consts"
-	"github.com/celestiaorg/tastora/framework/testutil/toml"
-	"github.com/celestiaorg/tastora/framework/types"
-	volumetypes "github.com/docker/docker/api/types/volume"
-	"github.com/docker/go-connections/nat"
-	"go.uber.org/zap"
+	"github.com/celestiaorg/tastora/framework/docker/container"
+	"github.com/celestiaorg/tastora/framework/docker/internal"
 	"path"
 	"regexp"
+	"strings"
 	"sync"
+
+	"github.com/celestiaorg/tastora/framework/testutil/toml"
+	"github.com/celestiaorg/tastora/framework/types"
+	"github.com/docker/go-connections/nat"
+	"go.uber.org/zap"
 )
 
 var _ types.DANode = &DANode{}
 
 const (
-	daNodeRPCPort = "26658/tcp"
-	daNodeP2PPort = "2121/tcp"
+	// Default port numbers (without /tcp suffix)
+	defaultDANodeRPCPort = "26658" // Default RPC port for DANode
+	defaultDANodeP2PPort = "2121"  // Default P2P port for DANode
+	defaultCoreRPCPort   = "26657" // Default RPC port for Core
+	defaultCoreGRPCPort  = "9090"  // Default GRPC port for Core
 )
-
-// daNodePorts defines the default port mappings for the DANode's RPC and P2P communication.
-var daNodePorts = nat.PortMap{
-	nat.Port(daNodeRPCPort): {},
-	nat.Port(daNodeP2PPort): {},
-}
 
 // newDANode initializes and returns a new DANode instance using the provided context, test name, and configuration.
 func newDANode(ctx context.Context, testName string, cfg Config, idx int, nodeType types.DANodeType) (*DANode, error) {
@@ -42,42 +41,25 @@ func newDANode(ctx context.Context, testName string, cfg Config, idx int, nodeTy
 	daNode := &DANode{
 		cfg:      cfg,
 		nodeType: nodeType,
-		node:     newNode(cfg.DockerNetworkID, cfg.DockerClient, testName, defaultImage, "/home/celestia", idx, nodeType.String(), logger),
+		Node:     container.NewNode(cfg.DockerNetworkID, cfg.DockerClient, testName, defaultImage, "/home/celestia", idx, nodeType.String(), logger),
 	}
 
-	daNode.containerLifecycle = NewContainerLifecycle(cfg.Logger, cfg.DockerClient, daNode.Name())
+	daNode.SetContainerLifecycle(container.NewLifecycle(cfg.Logger, cfg.DockerClient, daNode.Name()))
 
-	// image may be overridden by each node.
-	image := daNode.getImage()
+	// image may be overridden by each node, update Node with the final image
+	daNode.Image = daNode.getImage()
 
-	v, err := cfg.DockerClient.VolumeCreate(ctx, volumetypes.CreateOptions{
-		Labels: map[string]string{
-			consts.CleanupLabel:   testName,
-			consts.NodeOwnerLabel: daNode.Name(),
-		},
-	})
-	if err != nil {
-		return nil, fmt.Errorf("creating volume for chain node: %w", err)
-	}
-	daNode.VolumeName = v.Name
-
-	if err := SetVolumeOwner(ctx, VolumeOwnerOptions{
-		Log:        daNode.logger,
-		Client:     cfg.DockerClient,
-		VolumeName: v.Name,
-		ImageRef:   image.Ref(),
-		TestName:   testName,
-		UidGid:     image.UIDGID,
-	}); err != nil {
-		return nil, fmt.Errorf("set volume owner: %w", err)
+	// create and setup volume using shared logic
+	if err := daNode.CreateAndSetupVolume(ctx, daNode.Name()); err != nil {
+		return nil, err
 	}
 
 	return daNode, nil
 }
 
-// DANode is a docker implementation of a celestia bridge node.
+// DANode is a docker implementation of a celestia da node.
 type DANode struct {
-	*node
+	*container.Node
 	cfg            Config
 	mu             sync.Mutex
 	hasBeenStarted bool
@@ -105,9 +87,31 @@ func (n *DANode) GetInternalHostName() (string, error) {
 	return n.HostName(), nil
 }
 
+// GetInternalRPCAddress returns the internal RPC address resolvable within the network
+func (n *DANode) GetInternalRPCAddress() (string, error) {
+	rpcPort := strings.TrimSuffix(n.getRPCPort(), "/tcp")
+	return fmt.Sprintf("%s:%s", n.HostName(), rpcPort), nil
+}
+
+// GetInternalP2PAddress returns the internal P2P address resolvable within the network
+func (n *DANode) GetInternalP2PAddress() (string, error) {
+	p2pPort := strings.TrimSuffix(n.getP2PPort(), "/tcp")
+	return fmt.Sprintf("%s:%s", n.HostName(), p2pPort), nil
+}
+
 // GetType returns the type of the DANode as defined by the types.DANodeType enum.
 func (n *DANode) GetType() types.DANodeType {
 	return n.nodeType
+}
+
+// Name returns the container name for the DANode.
+func (n *DANode) Name() string {
+	return fmt.Sprintf("da-%s-%d-%s", n.nodeType.String(), n.Index, internal.SanitizeContainerName(n.TestName))
+}
+
+// HostName returns the condensed hostname for the DANode.
+func (n *DANode) HostName() string {
+	return internal.CondenseHostName(n.Name())
 }
 
 // GetHostRPCAddress returns the externally resolvable RPC address of the bridge node.
@@ -117,7 +121,7 @@ func (n *DANode) GetHostRPCAddress() string {
 
 // Stop terminates the DANode by stopping its associated container gracefully using the provided context.
 func (n *DANode) Stop(ctx context.Context) error {
-	return n.stopContainer(ctx)
+	return n.StopContainer(ctx)
 }
 
 // Start initializes and starts the DANode with the provided core IP and genesis hash in the given context.
@@ -128,7 +132,7 @@ func (n *DANode) Start(ctx context.Context, opts ...types.DANodeStartOption) err
 
 	// if the container has already been started, we just start the container with existing settings.
 	if n.hasBeenStarted {
-		return n.startContainer(ctx)
+		return n.StartContainer(ctx)
 	}
 	return n.startAndInitialize(ctx, opts...)
 }
@@ -166,22 +170,12 @@ func (n *DANode) startAndInitialize(ctx context.Context, opts ...types.DANodeSta
 	return nil
 }
 
-// Name of the test node container.
-func (n *node) Name() string {
-	return fmt.Sprintf("%s-%d-%s", n.GetType(), n.Index, SanitizeContainerName(n.TestName))
-}
-
-// HostName of the test node container.
-func (n *node) HostName() string {
-	return CondenseHostName(n.Name())
-}
-
 // ModifyConfigFiles modifies the specified config files with the provided TOML modifications.
 func (n *DANode) ModifyConfigFiles(ctx context.Context, configModifications map[string]toml.Toml) error {
 	for filePath, modifications := range configModifications {
 		if err := ModifyConfigFile(
 			ctx,
-			n.logger,
+			n.Logger,
 			n.DockerClient,
 			n.TestName,
 			n.VolumeName,
@@ -205,12 +199,12 @@ func (n *DANode) startNode(ctx context.Context, additionalStartArgs []string, co
 		return fmt.Errorf("failed to apply config modifications: %w", err)
 	}
 
-	if err := n.containerLifecycle.StartContainer(ctx); err != nil {
+	if err := n.ContainerLifecycle.StartContainer(ctx); err != nil {
 		return fmt.Errorf("failed to start container: %w", err)
 	}
 
 	// Set the host ports once since they will not change after the container has started.
-	hostPorts, err := n.containerLifecycle.GetHostPorts(ctx, daNodeRPCPort, daNodeP2PPort)
+	hostPorts, err := n.ContainerLifecycle.GetHostPorts(ctx, n.getRPCPort(), n.getP2PPort())
 	if err != nil {
 		return err
 	}
@@ -226,16 +220,16 @@ func (n *DANode) initNode(ctx context.Context, chainID string, env []string) err
 	}
 
 	// note: my_celes_key is the default key name for the da node.
-	cmd := []string{"celestia", n.nodeType.String(), "init", "--p2p.network", chainID, "--keyring.keyname", "my-key", "--node.store", n.homeDir}
-	_, _, err := n.exec(ctx, n.logger, cmd, env)
+	cmd := []string{"celestia", n.nodeType.String(), "init", "--p2p.network", chainID, "--keyring.keyname", "my-key", "--node.store", n.HomeDir()}
+	_, _, err := n.Exec(ctx, n.Logger, cmd, env)
 	return err
 }
 
 // createWallet creates a wallet for use on this node. Creating one explicitly
 // gives us access to the address for use in tests.
 func (n *DANode) createWallet(ctx context.Context) error {
-	cmd := []string{"cel-key", "add", "my-key", "--node.type", n.nodeType.String(), "--keyring-dir", path.Join(n.homeDir, "keys"), "--output", "json"}
-	_, stderr, err := n.exec(ctx, n.logger, cmd, nil)
+	cmd := []string{"cel-key", "add", "my-key", "--node.type", n.nodeType.String(), "--keyring-dir", path.Join(n.HomeDir(), "keys"), "--output", "json"}
+	_, stderr, err := n.Exec(ctx, n.Logger, cmd, nil)
 	if err != nil {
 		return fmt.Errorf("failed to create wallet: %w", err)
 	}
@@ -269,11 +263,8 @@ func extractAddressFromCreateWalletOutput(output string) string {
 func (n *DANode) createNodeContainer(ctx context.Context, additionalStartArgs []string, env []string) error {
 	cmd := []string{"celestia", n.nodeType.String(), "start"}
 	cmd = append(cmd, additionalStartArgs...)
-	usingPorts := nat.PortMap{}
-	for k, v := range daNodePorts {
-		usingPorts[k] = v
-	}
-	return n.containerLifecycle.CreateContainer(ctx, n.TestName, n.NetworkID, n.getImage(), usingPorts, "", n.bind(), nil, n.HostName(), cmd, env, []string{})
+	usingPorts := n.getPortMap() // Use configurable port map
+	return n.ContainerLifecycle.CreateContainer(ctx, n.TestName, n.NetworkID, n.getImage(), usingPorts, "", n.Bind(), nil, n.HostName(), cmd, env, []string{})
 }
 
 // initAuthToken initialises an admin auth token.
@@ -282,7 +273,7 @@ func (n *DANode) initAuthToken(ctx context.Context) error {
 	cmd := []string{"celestia", n.nodeType.String(), "auth", "admin"}
 
 	// Run the command inside the container
-	stdout, stderr, err := n.exec(ctx, n.logger, cmd, nil)
+	stdout, stderr, err := n.Exec(ctx, n.Logger, cmd, nil)
 	if err != nil {
 		return fmt.Errorf("failed to generate auth token (stderr=%q): %w", stderr, err)
 	}
@@ -316,18 +307,70 @@ func (n *DANode) getNodeConfig() *DANodeConfig {
 
 	nodeConfig, ok := configMap[n.Index]
 	if !ok {
-		n.logger.Debug("no node config found for node", zap.Int("index", n.Index), zap.String("type", n.nodeType.String()))
+		n.Logger.Debug("no node config found for node", zap.Int("index", n.Index), zap.String("type", n.nodeType.String()))
 	}
 
 	return nodeConfig
 }
 
 // getImage returns the Docker image for this node, preferring per-node config over the default image
-func (n *DANode) getImage() DockerImage {
+func (n *DANode) getImage() container.Image {
 	if nodeConfig := n.getNodeConfig(); nodeConfig != nil && nodeConfig.Image != nil {
 		return *nodeConfig.Image
 	}
 	return n.Image
+}
+
+// getRPCPort returns the RPC port for this node, with per-node config taking priority over network defaults
+func (n *DANode) getRPCPort() string {
+	if nodeConfig := n.getNodeConfig(); nodeConfig != nil && nodeConfig.RPCPort != "" {
+		return nodeConfig.RPCPort + "/tcp"
+	}
+	if n.cfg.DataAvailabilityNetworkConfig.DefaultRPCPort != "" {
+		return n.cfg.DataAvailabilityNetworkConfig.DefaultRPCPort + "/tcp"
+	}
+	return defaultDANodeRPCPort + "/tcp"
+}
+
+// getP2PPort returns the P2P port for this node, with per-node config taking priority over network defaults
+func (n *DANode) getP2PPort() string {
+	if nodeConfig := n.getNodeConfig(); nodeConfig != nil && nodeConfig.P2PPort != "" {
+		return nodeConfig.P2PPort + "/tcp"
+	}
+	if n.cfg.DataAvailabilityNetworkConfig.DefaultP2PPort != "" {
+		return n.cfg.DataAvailabilityNetworkConfig.DefaultP2PPort + "/tcp"
+	}
+	return defaultDANodeP2PPort + "/tcp"
+}
+
+// getCoreRPCPort returns the core RPC port this node should connect to
+func (n *DANode) getCoreRPCPort() string {
+	if nodeConfig := n.getNodeConfig(); nodeConfig != nil && nodeConfig.CoreRPCPort != "" {
+		return nodeConfig.CoreRPCPort
+	}
+	if n.cfg.DataAvailabilityNetworkConfig.DefaultCoreRPCPort != "" {
+		return n.cfg.DataAvailabilityNetworkConfig.DefaultCoreRPCPort
+	}
+	return defaultCoreRPCPort
+}
+
+// getCoreGRPCPort returns the core GRPC port this node should connect to
+func (n *DANode) getCoreGRPCPort() string {
+	if nodeConfig := n.getNodeConfig(); nodeConfig != nil && nodeConfig.CoreGRPCPort != "" {
+		return nodeConfig.CoreGRPCPort
+	}
+	if n.cfg.DataAvailabilityNetworkConfig.DefaultCoreGRPCPort != "" {
+		return n.cfg.DataAvailabilityNetworkConfig.DefaultCoreGRPCPort
+	}
+	return defaultCoreGRPCPort
+}
+
+// getPortMap returns the port mapping for this node using configurable ports
+func (n *DANode) getPortMap() nat.PortMap {
+	return nat.PortMap{
+		nat.Port(n.getRPCPort()): {},
+		nat.Port(n.getP2PPort()): {},
+	}
 }
 
 // disableRPCAuthModification provides a modification which disables RPC authentication so that the tests can use the endpoints without configuring auth.

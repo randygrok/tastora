@@ -4,18 +4,21 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/celestiaorg/tastora/framework/types"
-	libclient "github.com/cometbft/cometbft/rpc/jsonrpc/client"
-	"github.com/docker/go-connections/nat"
-	"go.uber.org/zap"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 	"net/http"
 	"path"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/celestiaorg/tastora/framework/docker/container"
+	"github.com/celestiaorg/tastora/framework/docker/internal"
+	"github.com/celestiaorg/tastora/framework/types"
+	libclient "github.com/cometbft/cometbft/rpc/jsonrpc/client"
+	"github.com/docker/go-connections/nat"
+	"go.uber.org/zap"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 var _ types.RollkitNode = &RollkitNode{}
@@ -35,7 +38,7 @@ var rollkitSentryPorts = nat.PortMap{
 }
 
 type RollkitNode struct {
-	*node
+	*container.Node
 	cfg Config
 	mu  sync.Mutex
 
@@ -49,23 +52,28 @@ type RollkitNode struct {
 	hostHTTPPort string
 }
 
-func NewRollkitNode(cfg Config, testName string, image DockerImage, index int) *RollkitNode {
+func NewRollkitNode(cfg Config, testName string, image container.Image, index int) *RollkitNode {
 	logger := cfg.Logger.With(
 		zap.Int("i", index),
 		zap.Bool("aggregator", index == 0),
 	)
 	rn := &RollkitNode{
-		cfg:  cfg,
-		node: newNode(cfg.DockerNetworkID, cfg.DockerClient, testName, image, path.Join("/var", "rollkit"), index, "rollkit", logger),
+		cfg:           cfg,
+		Node: container.NewNode(cfg.DockerNetworkID, cfg.DockerClient, testName, image, path.Join("/var", "rollkit"), index, "rollkit", logger),
 	}
 
-	rn.containerLifecycle = NewContainerLifecycle(cfg.Logger, cfg.DockerClient, rn.Name())
+	rn.SetContainerLifecycle(container.NewLifecycle(cfg.Logger, cfg.DockerClient, rn.Name()))
 	return rn
 }
 
 // Name of the test node container.
 func (rn *RollkitNode) Name() string {
-	return fmt.Sprintf("%s-rollkit-%d-%s", rn.cfg.RollkitChainConfig.ChainID, rn.Index, SanitizeContainerName(rn.TestName))
+	return fmt.Sprintf("%s-rollkit-%d-%s", rn.cfg.RollkitChainConfig.ChainID, rn.Index, internal.SanitizeContainerName(rn.TestName))
+}
+
+// HostName returns the condensed hostname for the RollkitNode.
+func (rn *RollkitNode) HostName() string {
+	return internal.CondenseHostName(rn.Name())
 }
 
 func (rn *RollkitNode) logger() *zap.Logger {
@@ -85,9 +93,9 @@ func (rn *RollkitNode) Init(ctx context.Context, initArguments ...string) error 
 	rn.mu.Lock()
 	defer rn.mu.Unlock()
 
-	cmd := []string{rn.cfg.RollkitChainConfig.Bin, "--home", rn.homeDir, "--chain_id", rn.cfg.RollkitChainConfig.ChainID, "init"}
+	cmd := []string{rn.cfg.RollkitChainConfig.Bin, "--home", rn.HomeDir(), "--chain_id", rn.cfg.RollkitChainConfig.ChainID, "init"}
 	if rn.isAggregator() {
-		signerPath := filepath.Join(rn.homeDir, "config")
+		signerPath := filepath.Join(rn.HomeDir(), "config")
 		cmd = append(cmd,
 			"--rollkit.node.aggregator",
 			"--rollkit.signer.passphrase="+rn.cfg.RollkitChainConfig.AggregatorPassphrase, //nolint:gosec // used for testing only
@@ -96,7 +104,7 @@ func (rn *RollkitNode) Init(ctx context.Context, initArguments ...string) error 
 
 	cmd = append(cmd, initArguments...)
 
-	_, _, err := rn.exec(ctx, rn.logger(), cmd, rn.cfg.RollkitChainConfig.Env)
+	_, _, err := rn.Exec(ctx, rn.Logger, cmd, rn.cfg.RollkitChainConfig.Env)
 	if err != nil {
 		return fmt.Errorf("failed to initialize rollkit node: %w", err)
 	}
@@ -127,12 +135,12 @@ func (rn *RollkitNode) createRollkitContainer(ctx context.Context, additionalSta
 
 	startCmd := []string{
 		rn.cfg.RollkitChainConfig.Bin,
-		"--home", rn.homeDir,
+		"--home", rn.HomeDir(),
 		"--chain_id", rn.cfg.RollkitChainConfig.ChainID,
 		"start",
 	}
 	if rn.isAggregator() {
-		signerPath := filepath.Join(rn.homeDir, "config")
+		signerPath := filepath.Join(rn.HomeDir(), "config")
 		startCmd = append(startCmd,
 			"--rollkit.node.aggregator",
 			"--rollkit.signer.passphrase="+rn.cfg.RollkitChainConfig.AggregatorPassphrase, //nolint:gosec // used for testing only
@@ -142,18 +150,18 @@ func (rn *RollkitNode) createRollkitContainer(ctx context.Context, additionalSta
 	// any custom arguments passed in on top of the required ones.
 	startCmd = append(startCmd, additionalStartArgs...)
 
-	return rn.containerLifecycle.CreateContainer(ctx, rn.TestName, rn.NetworkID, rn.Image, usingPorts, "", rn.bind(), nil, rn.HostName(), startCmd, rn.cfg.RollkitChainConfig.Env, []string{})
+	return rn.ContainerLifecycle.CreateContainer(ctx, rn.TestName, rn.NetworkID, rn.Image, usingPorts, "", rn.Bind(), nil, rn.HostName(), startCmd, rn.cfg.RollkitChainConfig.Env, []string{})
 }
 
 // startContainer starts the container for the RollkitNode, initializes its ports, and ensures the node rpc is responding returning.
 // Returns an error if the container fails to start, ports cannot be set, or syncing is not completed within the timeout.
 func (rn *RollkitNode) startContainer(ctx context.Context) error {
-	if err := rn.containerLifecycle.StartContainer(ctx); err != nil {
+	if err := rn.ContainerLifecycle.StartContainer(ctx); err != nil {
 		return err
 	}
 
 	// Set the host ports once since they will not change after the container has started.
-	hostPorts, err := rn.containerLifecycle.GetHostPorts(ctx, rollkitRpcPort, grpcPort, apiPort, p2pPort, rollkitHttpPort)
+	hostPorts, err := rn.ContainerLifecycle.GetHostPorts(ctx, rollkitRpcPort, grpcPort, apiPort, p2pPort, rollkitHttpPort)
 	if err != nil {
 		return err
 	}
@@ -196,27 +204,27 @@ func (rn *RollkitNode) GetHostName() string {
 
 // GetHostRPCPort returns the host RPC port
 func (rn *RollkitNode) GetHostRPCPort() string {
-	return strings.Replace(rn.hostRPCPort, "0.0.0.0:", "", -1)
+	return strings.ReplaceAll(rn.hostRPCPort, "0.0.0.0:", "")
 }
 
 // GetHostAPIPort returns the host API port
 func (rn *RollkitNode) GetHostAPIPort() string {
-	return strings.Replace(rn.hostAPIPort, "0.0.0.0:", "", -1)
+	return strings.ReplaceAll(rn.hostAPIPort, "0.0.0.0:", "")
 }
 
 // GetHostGRPCPort returns the host GRPC port
 func (rn *RollkitNode) GetHostGRPCPort() string {
-	return strings.Replace(rn.hostGRPCPort, "0.0.0.0:", "", -1)
+	return strings.ReplaceAll(rn.hostGRPCPort, "0.0.0.0:", "")
 }
 
 // GetHostP2PPort returns the host P2P port
 func (rn *RollkitNode) GetHostP2PPort() string {
-	return strings.Replace(rn.hostP2PPort, "0.0.0.0:", "", -1)
+	return strings.ReplaceAll(rn.hostP2PPort, "0.0.0.0:", "")
 }
 
 // GetHostHTTPPort returns the host HTTP port
 func (rn *RollkitNode) GetHostHTTPPort() string {
-	return strings.Replace(rn.hostHTTPPort, "0.0.0.0:", "", -1)
+	return strings.ReplaceAll(rn.hostHTTPPort, "0.0.0.0:", "")
 }
 
 // waitForNodeReady polls the health endpoint until the node is ready or timeout is reached
@@ -257,7 +265,7 @@ func (rn *RollkitNode) isNodeHealthy(client *http.Client, healthURL string) bool
 		rn.logger().Debug("rollkit node not ready yet", zap.String("url", healthURL), zap.Error(err))
 		return false
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode == 200 {
 		return true

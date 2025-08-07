@@ -2,9 +2,10 @@ package docker
 
 import (
 	"context"
+	"testing"
+
 	"github.com/celestiaorg/tastora/framework/docker/container"
 	"github.com/moby/moby/client"
-	"testing"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/cosmos/cosmos-sdk/types/module/testutil"
@@ -94,7 +95,7 @@ func (s *DockerTestSuite) CreateDockerProvider(opts ...ConfigOption) *Provider {
 			AggregatorPassphrase: "12345678",
 			NumNodes:             1,
 			Image: container.Image{
-				Repository: "ghcr.io/evstack/rollkit",
+				Repository: "ghcr.io/evstack/ev-node",
 				Version:    "main",
 				UIDGID:     "2000",
 			},

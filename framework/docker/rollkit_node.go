@@ -58,8 +58,8 @@ func NewRollkitNode(cfg Config, testName string, image container.Image, index in
 		zap.Bool("aggregator", index == 0),
 	)
 	rn := &RollkitNode{
-		cfg:           cfg,
-		Node: container.NewNode(cfg.DockerNetworkID, cfg.DockerClient, testName, image, path.Join("/var", "rollkit"), index, "rollkit", logger),
+		cfg:  cfg,
+		Node: container.NewNode(cfg.DockerNetworkID, cfg.DockerClient, testName, image, path.Join("/var", "rollkit"), index, types.NodeTypeRollkit, logger),
 	}
 
 	rn.SetContainerLifecycle(container.NewLifecycle(cfg.Logger, cfg.DockerClient, rn.Name()))

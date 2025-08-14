@@ -1,5 +1,7 @@
 package types
 
+import "fmt"
+
 // NodeType represents any node type that can be converted to a string
 type NodeType interface {
 	String() string
@@ -20,7 +22,10 @@ const (
 
 // String returns the string representation of the ConsensusNodeType
 func (n ConsensusNodeType) String() string {
-	return consensusNodeTypeStrings[n]
+	if int(n) >= 0 && int(n) < len(consensusNodeTypeStrings) {
+		return consensusNodeTypeStrings[n]
+	}
+	return fmt.Sprintf("ConsensusNodeType(%d)", int(n))
 }
 
 var consensusNodeTypeStrings = [...]string{
@@ -44,7 +49,10 @@ const (
 
 // String returns the string representation of the DANodeType
 func (n DANodeType) String() string {
-	return daNodeTypeStrings[n]
+	if int(n) >= 0 && int(n) < len(daNodeTypeStrings) {
+		return daNodeTypeStrings[n]
+	}
+	return fmt.Sprintf("DANodeType(%d)", int(n))
 }
 
 var daNodeTypeStrings = [...]string{

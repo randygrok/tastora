@@ -50,7 +50,7 @@ func NewHermes(ctx context.Context, dockerClient *dockerclient.Client, testName,
 		image,
 		hermesHomeDir,
 		index,
-		types.NodeTypeHermes,
+		HermesRelayer,
 		logger,
 	)
 

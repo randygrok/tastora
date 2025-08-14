@@ -11,9 +11,11 @@ type NodeType interface {
 type ConsensusNodeType int
 
 const (
+	// Unspecified consensus node type (zero value)
+	ConsensusUnspecified ConsensusNodeType = iota // Unspecified consensus node type
 	// Celestia Chain Node Types (CometBFT consensus)
-	NodeTypeValidator     ConsensusNodeType = iota // Validator node in blockchain
-	NodeTypeConsensusFull                          // Full node in blockchain
+	NodeTypeValidator     // Validator node in blockchain
+	NodeTypeConsensusFull // Full node in blockchain
 )
 
 // String returns the string representation of the ConsensusNodeType
@@ -22,31 +24,9 @@ func (n ConsensusNodeType) String() string {
 }
 
 var consensusNodeTypeStrings = [...]string{
-	"validator",      // NodeTypeValidator
-	"consensus-full", // NodeTypeConsensusFull
-}
-
-// Generic Node Types (Infrastructure and alternative systems)
-
-// GenericNodeType represents other types of nodes (infrastructure, alternative consensus, etc.)
-type GenericNodeType int
-
-const (
-	// Alternative Consensus Engines
-	NodeTypeRollkit GenericNodeType = iota // Rollkit node (alternative consensus engine)
-
-	// Infrastructure Services
-	NodeTypeHermes // Hermes IBC relayer service
-)
-
-// String returns the string representation of the GenericNodeType
-func (n GenericNodeType) String() string {
-	return genericNodeTypeStrings[n]
-}
-
-var genericNodeTypeStrings = [...]string{
-	"rollkit",        // NodeTypeRollkit
-	"hermes-relayer", // NodeTypeHermes
+	"unspec", // ConsensusUnspecified
+	"val",    // NodeTypeValidator
+	"cfull",  // NodeTypeConsensusFull
 }
 
 // DA Node Types (Data Availability layer)
@@ -55,9 +35,11 @@ var genericNodeTypeStrings = [...]string{
 type DANodeType int
 
 const (
-	BridgeNode DANodeType = iota // Bridge node in DA network
-	LightNode                    // Light node in DA network
-	FullNode                     // Full node in DA network
+	// Unspecified DA node type (zero value)
+	DAUnspecified DANodeType = iota // Unspecified DA node type
+	BridgeNode                      // Bridge node in DA network
+	LightNode                       // Light node in DA network
+	FullNode                        // Full node in DA network
 )
 
 // String returns the string representation of the DANodeType
@@ -66,6 +48,7 @@ func (n DANodeType) String() string {
 }
 
 var daNodeTypeStrings = [...]string{
+	"unspec", // DAUnspecified
 	"bridge", // BridgeNode
 	"light",  // LightNode
 	"full",   // FullNode
@@ -73,7 +56,6 @@ var daNodeTypeStrings = [...]string{
 
 // Interface Compliance Checks
 var (
-	_ NodeType = ConsensusNodeType(0)
-	_ NodeType = GenericNodeType(0)
-	_ NodeType = DANodeType(0)
+	_ NodeType = ConsensusUnspecified
+	_ NodeType = DAUnspecified
 )

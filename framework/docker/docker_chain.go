@@ -99,7 +99,7 @@ func (c *Chain) BroadcastBlobMessage(ctx context.Context, signingWallet types.Wa
 func (c *Chain) AddNode(ctx context.Context, nodeConfig ChainNodeConfig) error {
 	if nodeConfig.nodeType != types.NodeTypeConsensusFull {
 		// TODO: this is preserving existing functionality, we can update this to support addition of validator nodes.
-		return fmt.Errorf("node type must be %s", types.NodeTypeConsensusFull)
+		return fmt.Errorf("node type must be %s", types.NodeTypeConsensusFull.String())
 	}
 
 	// get genesis.json

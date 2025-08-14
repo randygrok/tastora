@@ -1,5 +1,7 @@
 package relayer
 
+import "github.com/celestiaorg/tastora/framework/types"
+
 // HermesNodeType represents a Hermes IBC relayer node
 type HermesNodeType struct{}
 
@@ -12,4 +14,4 @@ func (h HermesNodeType) String() string {
 var HermesRelayer = HermesNodeType{}
 
 // Interface Compliance Check - ensure HermesNodeType implements the NodeType interface
-var _ interface{ String() string } = HermesRelayer
+var _ types.NodeType = (*HermesNodeType)(nil)

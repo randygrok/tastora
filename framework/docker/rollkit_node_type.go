@@ -1,5 +1,7 @@
 package docker
 
+import "github.com/celestiaorg/tastora/framework/types"
+
 // RollkitNodeType represents a Rollkit node
 type RollkitNodeType struct{}
 
@@ -12,4 +14,4 @@ func (r RollkitNodeType) String() string {
 var RollkitType = RollkitNodeType{}
 
 // Interface Compliance Check - ensure RollkitNodeType implements the NodeType interface
-var _ interface{ String() string } = RollkitType
+var _ types.NodeType = (*RollkitNodeType)(nil)

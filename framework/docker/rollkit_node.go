@@ -136,7 +136,6 @@ func (rn *RollkitNode) createRollkitContainer(ctx context.Context, additionalSta
 	startCmd := []string{
 		rn.cfg.RollkitChainConfig.Bin,
 		"--home", rn.HomeDir(),
-		"--chain_id", rn.cfg.RollkitChainConfig.ChainID,
 		"start",
 	}
 	if rn.isAggregator() {

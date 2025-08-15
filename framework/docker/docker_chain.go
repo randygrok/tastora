@@ -3,8 +3,12 @@ package docker
 import (
 	"bytes"
 	"context"
-	sdkmath "cosmossdk.io/math"
 	"fmt"
+	"io"
+	"sync"
+	"testing"
+
+	sdkmath "cosmossdk.io/math"
 	"github.com/celestiaorg/go-square/v2/share"
 	"github.com/celestiaorg/tastora/framework/docker/consts"
 	addressutil "github.com/celestiaorg/tastora/framework/testutil/address"
@@ -16,9 +20,6 @@ import (
 	"github.com/docker/go-connections/nat"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
-	"io"
-	"sync"
-	"testing"
 )
 
 var _ types.Chain = &Chain{}
@@ -30,14 +31,6 @@ var sentryPorts = nat.PortMap{
 	nat.Port(apiPort):     {},
 	nat.Port(privValPort): {},
 }
-
-// NodeType represents the type of blockchain node
-type NodeType int
-
-const (
-	ValidatorNodeType NodeType = iota
-	FullNodeType
-)
 
 type Chain struct {
 	t          *testing.T
@@ -104,9 +97,9 @@ func (c *Chain) BroadcastBlobMessage(ctx context.Context, signingWallet types.Wa
 
 // AddNode adds a single full node to the chain with the given configuration
 func (c *Chain) AddNode(ctx context.Context, nodeConfig ChainNodeConfig) error {
-	if nodeConfig.nodeType != FullNodeType {
+	if nodeConfig.nodeType != types.NodeTypeConsensusFull {
 		// TODO: this is preserving existing functionality, we can update this to support addition of validator nodes.
-		return fmt.Errorf("node type must be FullNodeType")
+		return fmt.Errorf("node type must be %s", types.NodeTypeConsensusFull.String())
 	}
 
 	// get genesis.json

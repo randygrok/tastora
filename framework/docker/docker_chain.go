@@ -197,6 +197,7 @@ func (c *Chain) startAndInitializeNodes(ctx context.Context) error {
 	eg := new(errgroup.Group)
 	// initialize config and sign gentx for each validator.
 	for _, v := range c.Validators {
+		v := v
 		v.Validator = true
 		eg.Go(func() error {
 			if err := v.initNodeFiles(ctx); err != nil {
@@ -213,6 +214,7 @@ func (c *Chain) startAndInitializeNodes(ctx context.Context) error {
 	}
 	// initialize config for each full node.
 	for _, n := range c.FullNodes {
+		n := n
 		n.Validator = false
 		eg.Go(func() error {
 			return n.initNodeFiles(ctx)
@@ -257,6 +259,7 @@ func (c *Chain) startAndInitializeNodes(ctx context.Context) error {
 
 	eg, egCtx := errgroup.WithContext(ctx)
 	for _, n := range chainNodes {
+		n := n
 		eg.Go(func() error {
 			return n.createNodeContainer(egCtx)
 		})
@@ -272,6 +275,7 @@ func (c *Chain) startAndInitializeNodes(ctx context.Context) error {
 
 	eg, egCtx = errgroup.WithContext(ctx)
 	for _, n := range chainNodes {
+		n := n
 		c.log.Info("Starting container", zap.String("container", n.Name()), zap.String("peers", peers))
 		eg.Go(func() error {
 			if err := n.setPeers(egCtx, peers); err != nil {
@@ -366,6 +370,7 @@ func (c *Chain) startAllNodes(ctx context.Context) error {
 	defer c.mu.Unlock()
 	var eg errgroup.Group
 	for _, n := range c.Nodes() {
+		n := n
 		eg.Go(func() error {
 			if err := n.createNodeContainer(ctx); err != nil {
 				return err
@@ -379,6 +384,7 @@ func (c *Chain) startAllNodes(ctx context.Context) error {
 func (c *Chain) Stop(ctx context.Context) error {
 	var eg errgroup.Group
 	for _, n := range c.Nodes() {
+		n := n
 		eg.Go(func() error {
 			if err := n.stop(ctx); err != nil {
 				return err

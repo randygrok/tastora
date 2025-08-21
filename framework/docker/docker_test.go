@@ -2,8 +2,11 @@ package docker
 
 import (
 	"context"
+	"fmt"
 	"github.com/celestiaorg/tastora/framework/docker/container"
+	"github.com/celestiaorg/tastora/framework/testutil/random"
 	"github.com/moby/moby/client"
+	"sync"
 	"testing"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
@@ -11,38 +14,56 @@ import (
 	"github.com/cosmos/cosmos-sdk/x/auth"
 	"github.com/cosmos/cosmos-sdk/x/bank"
 	"github.com/cosmos/ibc-go/v8/modules/apps/transfer"
-	"github.com/stretchr/testify/suite"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest"
 )
 
-// DockerTestSuite is a test suite which can be used to perform tests which spin up a docker network.
-type DockerTestSuite struct {
-	suite.Suite
-	ctx          context.Context
-	dockerClient *client.Client
-	networkID    string
-	logger       *zap.Logger
-	encConfig    testutil.TestEncodingConfig
-	provider     *Provider
-	chain        *Chain
-	builder      *ChainBuilder
-}
+var sdkConfigOnce sync.Once
 
-// SetupSuite runs once before all tests in the suite.
-func (s *DockerTestSuite) SetupSuite() {
-	s.ctx = context.Background()
-
-	// configure Bech32 prefix, this needs to be set as account.String() uses the global config.
+// configureBech32Prefix configures the SDK's Bech32 prefix once globally
+func configureBech32Prefix() {
 	sdkConf := sdk.GetConfig()
 	sdkConf.SetBech32PrefixForAccount("celestia", "celestiapub")
-
-	s.logger = zaptest.NewLogger(s.T())
-	s.encConfig = testutil.MakeTestEncodingConfig(auth.AppModuleBasic{}, bank.AppModuleBasic{}, transfer.AppModuleBasic{})
 }
 
-func (s *DockerTestSuite) SetupTest() {
-	s.dockerClient, s.networkID = DockerSetup(s.T())
+// configureBech32PrefixOnce ensures the SDK configuration is set up once for all tests
+func configureBech32PrefixOnce() {
+	sdkConfigOnce.Do(configureBech32Prefix)
+}
+
+// TestSetupConfig contains all the components needed for a Docker test
+type TestSetupConfig struct {
+	DockerClient *client.Client
+	NetworkID    string
+	TestName     string
+	Logger       *zap.Logger
+	EncConfig    testutil.TestEncodingConfig
+	Builder      *ChainBuilder
+	Provider     *Provider
+	Chain        *Chain
+	Ctx          context.Context
+}
+
+
+// setupDockerTest creates an isolated Docker test environment
+func setupDockerTest(t *testing.T, opts ...ConfigOption) *TestSetupConfig {
+	t.Helper()
+
+	// ensure Bech32 prefix is configured once globally
+	configureBech32PrefixOnce()
+
+	// generate unique test name for parallel execution
+	uniqueTestName := fmt.Sprintf("%s-%s", t.Name(), random.LowerCaseLetterString(8))
+
+	ctx := context.Background()
+	dockerClient, networkID := DockerSetup(t)
+	
+	// Override the default cleanup to use our unique test name
+	t.Cleanup(DockerCleanupWithTestName(t, dockerClient, uniqueTestName))
+
+	logger := zaptest.NewLogger(t)
+	encConfig := testutil.MakeTestEncodingConfig(auth.AppModuleBasic{}, bank.AppModuleBasic{}, transfer.AppModuleBasic{})
 
 	defaultImage := container.Image{
 		Repository: "ghcr.io/celestiaorg/celestia-app",
@@ -50,12 +71,11 @@ func (s *DockerTestSuite) SetupTest() {
 		UIDGID:     "10001:10001",
 	}
 
-	// create a build with a default set of args, any individual test can override/modify.
-	s.builder = NewChainBuilder(s.T()).
-		WithDockerClient(s.dockerClient).
-		WithDockerNetworkID(s.networkID).
+	builder := NewChainBuilderWithTestName(t, uniqueTestName).
+		WithDockerClient(dockerClient).
+		WithDockerNetworkID(networkID).
 		WithImage(defaultImage).
-		WithEncodingConfig(&s.encConfig).
+		WithEncodingConfig(&encConfig).
 		WithAdditionalStartArgs(
 			"--force-no-bbr",
 			"--grpc.enable",
@@ -65,26 +85,19 @@ func (s *DockerTestSuite) SetupTest() {
 			"--minimum-gas-prices", "0utia",
 		).
 		WithNode(NewChainNodeConfigBuilder().Build())
-}
 
-// TearDownTest removes docker resources.
-func (s *DockerTestSuite) TearDownTest() {
-	DockerCleanup(s.T(), s.dockerClient)()
-}
-
-// CreateDockerProvider returns a provider with configuration options applied to the default Celestia config.
-func (s *DockerTestSuite) CreateDockerProvider(opts ...ConfigOption) *Provider {
+	// Create provider config
 	cfg := Config{
-		Logger:          s.logger,
-		DockerClient:    s.dockerClient,
-		DockerNetworkID: s.networkID,
+		Logger:          logger,
+		DockerClient:    dockerClient,
+		DockerNetworkID: networkID,
 		DataAvailabilityNetworkConfig: &DataAvailabilityNetworkConfig{
 			FullNodeCount:   1,
 			BridgeNodeCount: 1,
 			LightNodeCount:  1,
 			Image: container.Image{
 				Repository: "ghcr.io/celestiaorg/celestia-node",
-				Version:    "pr-4283", // TODO: use tag that includes changes from https://github.com/celestiaorg/celestia-node/pull/4283.
+				Version:    "pr-4283",
 				UIDGID:     "10001:10001",
 			},
 		},
@@ -105,26 +118,50 @@ func (s *DockerTestSuite) CreateDockerProvider(opts ...ConfigOption) *Provider {
 		opt(&cfg)
 	}
 
-	return NewProvider(cfg, s.T())
+	provider := NewProviderWithTestName(cfg, t, uniqueTestName)
+
+	return &TestSetupConfig{
+		DockerClient: dockerClient,
+		NetworkID:    networkID,
+		TestName:     uniqueTestName,
+		Logger:       logger,
+		EncConfig:    encConfig,
+		Builder:      builder,
+		Provider:     provider,
+		Ctx:          ctx,
+	}
 }
 
+
 // getGenesisHash returns the genesis hash of the given chain node.
-func (s *DockerTestSuite) getGenesisHash(ctx context.Context) string {
-	node := s.chain.GetNodes()[0]
+func getGenesisHash(ctx context.Context, chain *Chain) (string, error) {
+	node := chain.GetNodes()[0]
 	c, err := node.GetRPCClient()
-	s.Require().NoError(err, "failed to get node client")
+	if err != nil {
+		return "", fmt.Errorf("failed to get node client: %v", err)
+	}
 
 	first := int64(1)
 	block, err := c.Block(ctx, &first)
-	s.Require().NoError(err, "failed to get block")
+	if err != nil {
+		return "", fmt.Errorf("failed to get block: %v", err)
+	}
 
 	genesisHash := block.Block.Header.Hash().String()
-	s.Require().NotEmpty(genesisHash, "genesis hash is empty")
-	return genesisHash
+	if genesisHash == "" {
+		return "", fmt.Errorf("genesis hash is empty")
+	}
+	return genesisHash, nil
 }
 
 // TestPerNodeDifferentImages tests that nodes can be deployed with different Docker images
-func (s *DockerTestSuite) TestPerNodeDifferentImages() {
+func TestPerNodeDifferentImages(t *testing.T) {
+	t.Parallel()
+	configureBech32PrefixOnce()
+
+	// Setup isolated docker environment for this test
+	testCfg := setupDockerTest(t)
+
 	alternativeImage := container.Image{
 		Repository: "ghcr.io/celestiaorg/celestia-app",
 		Version:    "v4.0.0-rc5", // different version from default
@@ -156,83 +193,82 @@ func (s *DockerTestSuite) TestPerNodeDifferentImages() {
 		Build()
 
 	// Use builder directly - tests can modify as needed before calling Build
-	var err error
-	s.chain, err = s.builder.
+	chain, err := testCfg.Builder.
 		WithNodes(validator0Config, validator1Config).
-		Build(s.ctx)
-	s.Require().NoError(err)
+		Build(testCfg.Ctx)
+	require.NoError(t, err)
 
-	err = s.chain.Start(s.ctx)
-	s.Require().NoError(err)
+	err = chain.Start(testCfg.Ctx)
+	require.NoError(t, err)
 
-	validatorNodes := s.chain.GetNodes()
-	s.Require().Len(validatorNodes, 2, "expected 2 validators")
+	validatorNodes := chain.GetNodes()
+	require.Len(t, validatorNodes, 2, "expected 2 validators")
 
 	// verify both validators are accessible
 	for i, node := range validatorNodes {
 		client, err := node.GetRPCClient()
-		s.Require().NoError(err, "node %d should have accessible RPC client", i)
+		require.NoError(t, err, "node %d should have accessible RPC client", i)
 
-		status, err := client.Status(s.ctx)
-		s.Require().NoError(err, "node %d should return status", i)
-		s.Require().NotNil(status, "node %d status should not be nil", i)
+		status, err := client.Status(testCfg.Ctx)
+		require.NoError(t, err, "node %d should return status", i)
+		require.NotNil(t, status, "node %d status should not be nil", i)
 
-		s.T().Logf("Node %d is running with chain ID: %s", i, status.NodeInfo.Network)
+		t.Logf("Node %d is running with chain ID: %s", i, status.NodeInfo.Network)
 	}
 }
 
 // TestChainNodeExec tests the Exec method on ChainNode
-func (s *DockerTestSuite) TestChainNodeExec() {
-	var err error
-	s.provider = s.CreateDockerProvider()
-	s.chain, err = s.builder.Build(s.ctx)
-	s.Require().NoError(err)
+func TestChainNodeExec(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping due to short mode")
+	}
+	t.Parallel()
+	configureBech32PrefixOnce()
 
-	err = s.chain.Start(s.ctx)
-	s.Require().NoError(err)
+	// Setup isolated docker environment for this test
+	testCfg := setupDockerTest(t)
 
-	nodes := s.chain.GetNodes()
-	s.Require().NotEmpty(nodes, "chain should have nodes")
+	chain, err := testCfg.Builder.Build(testCfg.Ctx)
+	require.NoError(t, err)
+
+	err = chain.Start(testCfg.Ctx)
+	require.NoError(t, err)
+
+	nodes := chain.GetNodes()
+	require.NotEmpty(t, nodes, "chain should have nodes")
 
 	node := nodes[0]
 
 	// test executing a simple command
 	cmd := []string{"echo", "hello world"}
 
-	stdout, stderr, err := node.Exec(s.ctx, cmd, nil)
-	s.Require().NoError(err, "Exec should succeed")
-	s.Require().Contains(string(stdout), "hello world", "stdout should contain expected output")
-	s.Require().Empty(stderr, "stderr should be empty for successful echo command")
+	stdout, stderr, err := node.Exec(testCfg.Ctx, cmd, nil)
+	require.NoError(t, err, "Exec should succeed")
+	require.Contains(t, string(stdout), "hello world", "stdout should contain expected output")
+	require.Empty(t, stderr, "stderr should be empty for successful echo command")
 
 	// test executing a command with environment variables
 	cmd = []string{"sh", "-c", "echo $TEST_VAR"}
 	env := []string{"TEST_VAR=test_value"}
 
-	stdout, stderr, err = node.Exec(s.ctx, cmd, env)
-	s.Require().NoError(err, "Exec with env vars should succeed")
-	s.Require().Contains(string(stdout), "test_value", "stdout should contain env var value")
-	s.Require().Empty(stderr, "stderr should be empty for successful command")
+	stdout, stderr, err = node.Exec(testCfg.Ctx, cmd, env)
+	require.NoError(t, err, "Exec with env vars should succeed")
+	require.Contains(t, string(stdout), "test_value", "stdout should contain env var value")
+	require.Empty(t, stderr, "stderr should be empty for successful command")
 
 	// test executing a command that outputs to stderr
 	cmd = []string{"sh", "-c", "echo 'error message' >&2"}
 
-	stdout, stderr, err = node.Exec(s.ctx, cmd, nil)
-	s.Require().NoError(err, "Exec with stderr output should succeed")
-	s.Require().Empty(stdout, "stdout should be empty")
-	s.Require().Contains(string(stderr), "error message", "stderr should contain expected output")
+	stdout, stderr, err = node.Exec(testCfg.Ctx, cmd, nil)
+	require.NoError(t, err, "Exec with stderr output should succeed")
+	require.Empty(t, stdout, "stdout should be empty")
+	require.Contains(t, string(stderr), "error message", "stderr should contain expected output")
 
 	// test executing a command that returns an error
 	cmd = []string{"sh", "-c", "exit 1"}
 
-	stdout, stderr, err = node.Exec(s.ctx, cmd, nil)
-	s.Require().Error(err, "Exec with failing command should return error")
-	s.Require().Empty(stdout, "stdout should be empty for failing command")
-	s.Require().Empty(stderr, "stderr should be empty for failing command")
-}
-
-func TestDockerSuite(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping due to short mode")
-	}
-	suite.Run(t, new(DockerTestSuite))
+	stdout, stderr, err = node.Exec(testCfg.Ctx, cmd, nil)
+	require.Error(t, err, "Exec with failing command should return error")
+	require.Empty(t, stdout, "stdout should be empty for failing command")
+	require.Empty(t, stderr, "stderr should be empty for failing command")
 }

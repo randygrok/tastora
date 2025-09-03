@@ -5,12 +5,13 @@ import (
 	"testing"
 
 	"github.com/celestiaorg/tastora/framework/docker/container"
+	da "github.com/celestiaorg/tastora/framework/docker/dataavailability"
 	"github.com/celestiaorg/tastora/framework/testutil/toml"
 	"github.com/celestiaorg/tastora/framework/types"
 	"github.com/stretchr/testify/require"
 )
 
-// TestDANetworkCreation tests the creation of a DataAvailabilityNetwork with one of each type of node.
+// TestDANetworkCreation tests the creation of a dataavailability.Network with one of each type of node.
 func TestDANetworkCreation(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping due to short mode")
@@ -18,48 +19,64 @@ func TestDANetworkCreation(t *testing.T) {
 	t.Parallel()
 	configureBech32PrefixOnce()
 
-	// configure different images for different DA node types
-	bridgeNodeConfigs := map[int]*DANodeConfig{
-		0: {
-			Image: &container.Image{
-				Repository: "ghcr.io/celestiaorg/celestia-node",
-				Version:    "pr-4283",
-				UIDGID:     "10001:10001",
-			},
-		},
-	}
-
-	fullNodeConfigs := map[int]*DANodeConfig{
-		0: {
-			Image: &container.Image{
-				Repository: "ghcr.io/celestiaorg/celestia-node",
-				Version:    "pr-4283",
-				UIDGID:     "10001:10001",
-			},
-		},
-	}
-
 	// Setup isolated docker environment for this test
-	testCfg := setupDockerTest(t,
-		WithPerBridgeNodeConfig(bridgeNodeConfigs),
-		WithPerFullNodeConfig(fullNodeConfigs),
-	)
-	provider := testCfg.Provider
-	chain, err := testCfg.Builder.Build(testCfg.Ctx)
+	testCfg := setupDockerTest(t)
+
+	chain, err := testCfg.ChainBuilder.Build(testCfg.Ctx)
 	require.NoError(t, err)
 
 	err = chain.Start(testCfg.Ctx)
 	require.NoError(t, err)
 
-	var (
-		bridgeNodes []types.DANode
-		lightNodes  []types.DANode
-		fullNodes   []types.DANode
-	)
+	// Configure different images for different DA node types using builder pattern
+	bridgeImage := container.Image{
+		Repository: "ghcr.io/celestiaorg/celestia-node",
+		Version:    "pr-4283",
+		UIDGID:     "10001:10001",
+	}
 
-	// default configuration uses 1/1/1 for Bridge/Light/Full da nodes.
-	daNetwork, err := provider.GetDataAvailabilityNetwork(testCfg.Ctx)
+	fullImage := container.Image{
+		Repository: "ghcr.io/celestiaorg/celestia-node",
+		Version:    "pr-4283",
+		UIDGID:     "10001:10001",
+	}
+
+	// Create node configurations with different images
+	bridgeNodeConfig := da.NewNodeBuilder().
+		WithNodeType(types.BridgeNode).
+		WithImage(bridgeImage).
+		Build()
+
+	fullNodeConfig := da.NewNodeBuilder().
+		WithNodeType(types.FullNode).
+		WithImage(fullImage).
+		Build()
+
+	// Default image for the network
+	defaultImage := container.Image{
+		Repository: "ghcr.io/celestiaorg/celestia-node",
+		Version:    "pr-4283",
+		UIDGID:     "10001:10001",
+	}
+
+	// Add light node config for testing
+	lightNodeConfig := da.NewNodeBuilder().
+		WithNodeType(types.LightNode).
+		Build()
+
+	// Create DA network with all node types (default configuration uses 1/1/1 for Bridge/Light/Full da nodes)
+	daNetwork, err := testCfg.DANetworkBuilder.
+		WithChainID(chain.GetChainID()).
+		WithImage(defaultImage).
+		WithNodes(bridgeNodeConfig, lightNodeConfig, fullNodeConfig).
+		Build(testCfg.Ctx)
 	require.NoError(t, err)
+
+	var (
+		bridgeNodes []*da.Node
+		lightNodes  []*da.Node
+		fullNodes   []*da.Node
+	)
 
 	t.Run("da nodes can be created", func(t *testing.T) {
 		bridgeNodes = daNetwork.GetBridgeNodes()
@@ -86,9 +103,9 @@ func TestDANetworkCreation(t *testing.T) {
 
 	t.Run("bridge node can be started", func(t *testing.T) {
 		err = bridgeNode.Start(testCfg.Ctx,
-			types.WithChainID(chainID),
-			types.WithAdditionalStartArguments("--p2p.network", chainID, "--core.ip", hostname, "--rpc.addr", "0.0.0.0"),
-			types.WithEnvironmentVariables(
+			da.WithChainID(chainID),
+			da.WithAdditionalStartArguments("--p2p.network", chainID, "--core.ip", hostname, "--rpc.addr", "0.0.0.0"),
+			da.WithEnvironmentVariables(
 				map[string]string{
 					"CELESTIA_CUSTOM": types.BuildCelestiaCustomEnvVar(chainID, genesisHash, ""),
 					"P2P_NETWORK":     chainID,
@@ -106,9 +123,9 @@ func TestDANetworkCreation(t *testing.T) {
 		require.NoError(t, err, "failed to get bridge node p2p address")
 
 		err = fullNode.Start(testCfg.Ctx,
-			types.WithChainID(chainID),
-			types.WithAdditionalStartArguments("--p2p.network", chainID, "--core.ip", hostname, "--rpc.addr", "0.0.0.0"),
-			types.WithEnvironmentVariables(
+			da.WithChainID(chainID),
+			da.WithAdditionalStartArguments("--p2p.network", chainID, "--core.ip", hostname, "--rpc.addr", "0.0.0.0"),
+			da.WithEnvironmentVariables(
 				map[string]string{
 					"CELESTIA_CUSTOM": types.BuildCelestiaCustomEnvVar(chainID, genesisHash, p2pAddr),
 					"P2P_NETWORK":     chainID,
@@ -126,9 +143,9 @@ func TestDANetworkCreation(t *testing.T) {
 		require.NoError(t, err, "failed to get full node p2p address")
 
 		err = lightNode.Start(testCfg.Ctx,
-			types.WithChainID(chainID),
-			types.WithAdditionalStartArguments("--p2p.network", chainID, "--rpc.addr", "0.0.0.0"),
-			types.WithEnvironmentVariables(
+			da.WithChainID(chainID),
+			da.WithAdditionalStartArguments("--p2p.network", chainID, "--rpc.addr", "0.0.0.0"),
+			da.WithEnvironmentVariables(
 				map[string]string{
 					"CELESTIA_CUSTOM": types.BuildCelestiaCustomEnvVar(chainID, genesisHash, p2pAddr),
 					"P2P_NETWORK":     chainID,
@@ -152,19 +169,34 @@ func TestModifyConfigFileDANetwork(t *testing.T) {
 
 	// Setup isolated docker environment for this test
 	testCfg := setupDockerTest(t)
-	var bridgeNodes []types.DANode
 
-	provider := testCfg.Provider
-	chain, err := testCfg.Builder.Build(testCfg.Ctx)
+	chain, err := testCfg.ChainBuilder.Build(testCfg.Ctx)
 	require.NoError(t, err)
 
 	err = chain.Start(testCfg.Ctx)
 	require.NoError(t, err)
 
-	// default configuration uses 1/1/1 for Bridge/Light/Full da nodes.
-	daNetwork, err := provider.GetDataAvailabilityNetwork(testCfg.Ctx)
+	// Default image for the DA network
+	defaultImage := container.Image{
+		Repository: "ghcr.io/celestiaorg/celestia-node",
+		Version:    "pr-4283",
+		UIDGID:     "10001:10001",
+	}
+
+	// Create bridge node config for testing
+	bridgeNodeConfig := da.NewNodeBuilder().
+		WithNodeType(types.BridgeNode).
+		Build()
+
+	// Create DA network with bridge node
+	daNetwork, err := testCfg.DANetworkBuilder.
+		WithChainID(chain.GetChainID()).
+		WithImage(defaultImage).
+		WithNodes(bridgeNodeConfig).
+		Build(testCfg.Ctx)
 	require.NoError(t, err)
 
+	var bridgeNodes []*da.Node
 	t.Run("da nodes can be created", func(t *testing.T) {
 		bridgeNodes = daNetwork.GetBridgeNodes()
 		require.Len(t, bridgeNodes, 1)
@@ -182,9 +214,9 @@ func TestModifyConfigFileDANetwork(t *testing.T) {
 
 	t.Run("bridge node can be started", func(t *testing.T) {
 		err = bridgeNode.Start(testCfg.Ctx,
-			types.WithChainID(chainID),
-			types.WithAdditionalStartArguments("--p2p.network", chainID, "--core.ip", hostname, "--rpc.addr", "0.0.0.0"),
-			types.WithEnvironmentVariables(
+			da.WithChainID(chainID),
+			da.WithAdditionalStartArguments("--p2p.network", chainID, "--core.ip", hostname, "--rpc.addr", "0.0.0.0"),
+			da.WithEnvironmentVariables(
 				map[string]string{
 					"CELESTIA_CUSTOM": types.BuildCelestiaCustomEnvVar(chainID, genesisHash, ""),
 					"P2P_NETWORK":     chainID,
@@ -214,7 +246,7 @@ func TestModifyConfigFileDANetwork(t *testing.T) {
 }
 
 // setAuth modifies the node's configuration to enable or disable authentication and restarts the node to apply changes.
-func setAuth(t *testing.T, ctx context.Context, daNode types.DANode, auth bool) {
+func setAuth(t *testing.T, ctx context.Context, daNode *da.Node, auth bool) {
 	modifications := map[string]toml.Toml{
 		"config.toml": {
 			"RPC": toml.Toml{
@@ -233,7 +265,7 @@ func setAuth(t *testing.T, ctx context.Context, daNode types.DANode, auth bool) 
 	require.NoErrorf(t, err, "failed to re-start %s node", daNode.GetType().String())
 }
 
-// TestDANetworkCustomPorts tests the configuration of custom ports for DA nodes
+// TestDANetworkCustomPorts tests the configuration of custom ports for DA nodes.
 func TestDANetworkCustomPorts(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping due to short mode")
@@ -241,58 +273,36 @@ func TestDANetworkCustomPorts(t *testing.T) {
 	t.Parallel()
 	configureBech32PrefixOnce()
 
-	t.Run("test simple configuration with WithDefaultPorts", func(t *testing.T) {
+	t.Run("test custom ports using builder pattern", func(t *testing.T) {
 		// Setup isolated docker environment for this test
-		testCfg := setupDockerTest(t,
-			WithDefaultPorts(), // This should use ports 26668, 2131, 26667, 9091
-		)
+		testCfg := setupDockerTest(t)
 
-		// Test the simple one-liner configuration
-		provider := testCfg.Provider
-
-		chain, err := testCfg.Builder.Build(testCfg.Ctx)
+		chain, err := testCfg.ChainBuilder.Build(testCfg.Ctx)
 		require.NoError(t, err)
 
 		err = chain.Start(testCfg.Ctx)
 		require.NoError(t, err)
 		defer func() { _ = chain.Stop(testCfg.Ctx) }()
 
-		daNetwork, err := provider.GetDataAvailabilityNetwork(testCfg.Ctx)
-		require.NoError(t, err)
+		// Default image for the DA network
+		defaultImage := container.Image{
+			Repository: "ghcr.io/celestiaorg/celestia-node",
+			Version:    "pr-4283",
+			UIDGID:     "10001:10001",
+		}
 
-		bridgeNodes := daNetwork.GetBridgeNodes()
-		require.Len(t, bridgeNodes, 1)
+		// Create bridge node config with custom ports
+		bridgeNodeConfig := da.NewNodeBuilder().
+			WithNodeType(types.BridgeNode).
+			WithPorts("27000", "3000", "27001", "9095").
+			Build()
 
-		bridgeNode := bridgeNodes[0]
-
-		// Verify that internal addresses use the custom ports
-		rpcAddr, err := bridgeNode.GetInternalRPCAddress()
-		require.NoError(t, err)
-		require.Contains(t, rpcAddr, ":26668", "RPC address should use custom port 26668")
-
-		p2pAddr, err := bridgeNode.GetInternalP2PAddress()
-		require.NoError(t, err)
-		require.Contains(t, p2pAddr, ":2131", "P2P address should use custom port 2131")
-	})
-
-	t.Run("test custom ports setup with individual functions", func(t *testing.T) {
-		// Setup isolated docker environment for this test
-		testCfg := setupDockerTest(t,
-			WithDANodePorts("27000", "3000"),
-			WithDANodeCoreConnection("27001", "9095"),
-		)
-
-		// Test the custom ports configuration using individual functions
-		provider := testCfg.Provider
-
-		chain, err := testCfg.Builder.Build(testCfg.Ctx)
-		require.NoError(t, err)
-
-		err = chain.Start(testCfg.Ctx)
-		require.NoError(t, err)
-		defer func() { _ = chain.Stop(testCfg.Ctx) }()
-
-		daNetwork, err := provider.GetDataAvailabilityNetwork(testCfg.Ctx)
+		// Create DA network with custom port bridge node
+		daNetwork, err := testCfg.DANetworkBuilder.
+			WithChainID(chain.GetChainID()).
+			WithImage(defaultImage).
+			WithNodes(bridgeNodeConfig).
+			Build(testCfg.Ctx)
 		require.NoError(t, err)
 
 		bridgeNodes := daNetwork.GetBridgeNodes()
@@ -308,57 +318,44 @@ func TestDANetworkCustomPorts(t *testing.T) {
 		p2pAddr, err := bridgeNode.GetInternalP2PAddress()
 		require.NoError(t, err)
 		require.Contains(t, p2pAddr, ":3000", "P2P address should use custom port 3000")
+
+		// Verify all custom ports using GetPortInfo
+		portInfo := bridgeNode.GetPortInfo()
+		require.Equal(t, "27000", portInfo.RPCPort, "RPC port should be custom port 27000")
+		require.Equal(t, "3000", portInfo.P2PPort, "P2P port should be custom port 3000")
+		require.Equal(t, "27001", portInfo.CoreRPCPort, "Core RPC port should be custom port 27001")
+		require.Equal(t, "9095", portInfo.CoreGRPCPort, "Core GRPC port should be custom port 9095")
 	})
 
-	t.Run("test per-node configuration with WithNodePorts", func(t *testing.T) {
+	t.Run("test default ports behavior", func(t *testing.T) {
 		// Setup isolated docker environment for this test
-		testCfg := setupDockerTest(t,
-			WithNodePorts(types.BridgeNode, 0, "28000", "4000"), // Configure bridge node 0 with specific ports
-		)
+		testCfg := setupDockerTest(t)
 
-		// Test per-node configuration
-		provider := testCfg.Provider
-
-		chain, err := testCfg.Builder.Build(testCfg.Ctx)
+		chain, err := testCfg.ChainBuilder.Build(testCfg.Ctx)
 		require.NoError(t, err)
 
 		err = chain.Start(testCfg.Ctx)
 		require.NoError(t, err)
 		defer func() { _ = chain.Stop(testCfg.Ctx) }()
 
-		daNetwork, err := provider.GetDataAvailabilityNetwork(testCfg.Ctx)
-		require.NoError(t, err)
+		// Default image for the DA network
+		defaultImage := container.Image{
+			Repository: "ghcr.io/celestiaorg/celestia-node",
+			Version:    "pr-4283",
+			UIDGID:     "10001:10001",
+		}
 
-		bridgeNodes := daNetwork.GetBridgeNodes()
-		require.Len(t, bridgeNodes, 1)
+		// Create bridge node config with default ports (no custom ports specified)
+		bridgeNodeConfig := da.NewNodeBuilder().
+			WithNodeType(types.BridgeNode).
+			Build()
 
-		bridgeNode := bridgeNodes[0]
-
-		// Verify that internal addresses use the per-node custom ports
-		rpcAddr, err := bridgeNode.GetInternalRPCAddress()
-		require.NoError(t, err)
-		require.Contains(t, rpcAddr, ":28000", "RPC address should use per-node custom port 28000")
-
-		p2pAddr, err := bridgeNode.GetInternalP2PAddress()
-		require.NoError(t, err)
-		require.Contains(t, p2pAddr, ":4000", "P2P address should use per-node custom port 4000")
-	})
-
-	t.Run("test backward compatibility - default behavior unchanged", func(t *testing.T) {
-		// Setup isolated docker environment for this test
-		testCfg := setupDockerTest(t) // No custom configuration
-
-		// Test that existing code works unchanged
-		provider := testCfg.Provider
-
-		chain, err := testCfg.Builder.Build(testCfg.Ctx)
-		require.NoError(t, err)
-
-		err = chain.Start(testCfg.Ctx)
-		require.NoError(t, err)
-		defer func() { _ = chain.Stop(testCfg.Ctx) }()
-
-		daNetwork, err := provider.GetDataAvailabilityNetwork(testCfg.Ctx)
+		// Create DA network with default port bridge node
+		daNetwork, err := testCfg.DANetworkBuilder.
+			WithChainID(chain.GetChainID()).
+			WithImage(defaultImage).
+			WithNodes(bridgeNodeConfig).
+			Build(testCfg.Ctx)
 		require.NoError(t, err)
 
 		bridgeNodes := daNetwork.GetBridgeNodes()
@@ -374,5 +371,12 @@ func TestDANetworkCustomPorts(t *testing.T) {
 		p2pAddr, err := bridgeNode.GetInternalP2PAddress()
 		require.NoError(t, err)
 		require.Contains(t, p2pAddr, ":2121", "P2P address should use default port 2121")
+
+		// Verify all default ports using GetPortInfo
+		portInfo := bridgeNode.GetPortInfo()
+		require.Equal(t, "26658", portInfo.RPCPort, "RPC port should be default port 26658")
+		require.Equal(t, "2121", portInfo.P2PPort, "P2P port should be default port 2121")
+		require.Equal(t, "26657", portInfo.CoreRPCPort, "Core RPC port should be default port 26657")
+		require.Equal(t, "9090", portInfo.CoreGRPCPort, "Core GRPC port should be default port 9090")
 	})
 }

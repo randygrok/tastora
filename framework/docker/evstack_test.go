@@ -6,6 +6,7 @@ import (
 
 	"cosmossdk.io/math"
 	"github.com/celestiaorg/tastora/framework/docker/container"
+	da "github.com/celestiaorg/tastora/framework/docker/dataavailability"
 	"github.com/celestiaorg/tastora/framework/docker/evstack"
 	sdkacc "github.com/celestiaorg/tastora/framework/testutil/sdkacc"
 	"github.com/celestiaorg/tastora/framework/types"
@@ -24,14 +25,28 @@ func TestEvstack(t *testing.T) {
 	// Setup isolated docker environment for this test
 	testCfg := setupDockerTest(t)
 
-	provider := testCfg.Provider
-	chain, err := testCfg.Builder.Build(testCfg.Ctx)
+	chain, err := testCfg.ChainBuilder.Build(testCfg.Ctx)
 	require.NoError(t, err)
 
 	err = chain.Start(testCfg.Ctx)
 	require.NoError(t, err)
 
-	daNetwork, err := provider.GetDataAvailabilityNetwork(testCfg.Ctx)
+	// Create DA network using builder pattern
+	celestiaImage := container.Image{
+		Repository: "ghcr.io/celestiaorg/celestia-node",
+		Version:    "pr-4283",
+		UIDGID:     "10001:10001",
+	}
+
+	bridgeNodeConfig := da.NewNodeBuilder().
+		WithNodeType(types.BridgeNode).
+		Build()
+
+	daNetwork, err := testCfg.DANetworkBuilder.
+		WithChainID(chain.GetChainID()).
+		WithImage(celestiaImage).
+		WithNodes(bridgeNodeConfig).
+		Build(testCfg.Ctx)
 	require.NoError(t, err)
 
 	genesisHash, err := getGenesisHash(testCfg.Ctx, chain)
@@ -45,9 +60,9 @@ func TestEvstack(t *testing.T) {
 
 	t.Run("bridge node can be started", func(t *testing.T) {
 		err = bridgeNode.Start(testCfg.Ctx,
-			types.WithChainID(chainID),
-			types.WithAdditionalStartArguments("--p2p.network", chainID, "--core.ip", hostname, "--rpc.addr", "0.0.0.0"),
-			types.WithEnvironmentVariables(
+			da.WithChainID(chainID),
+			da.WithAdditionalStartArguments("--p2p.network", chainID, "--core.ip", hostname, "--rpc.addr", "0.0.0.0"),
+			da.WithEnvironmentVariables(
 				map[string]string{
 					"CELESTIA_CUSTOM": types.BuildCelestiaCustomEnvVar(chainID, genesisHash, ""),
 					"P2P_NETWORK":     chainID,

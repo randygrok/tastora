@@ -1,4 +1,4 @@
-package docker
+package cosmos
 
 import (
 	"context"
@@ -8,17 +8,14 @@ import (
 	"go.uber.org/zap"
 )
 
-type Config struct {
+type ChainConfig struct {
 	Logger *zap.Logger
 	// DockerClient is a Docker client instance used for the tests.
 	DockerClient *client.Client
 	// DockerNetworkID is the ID of the docker network the nodes are deployed to.
 	DockerNetworkID string
-	// ChainConfig defines configuration specific to the app chain.
-	ChainConfig *ChainConfig
-}
-
-type ChainConfig struct {
+	
+	// Chain configuration fields (previously in ChainConfig)
 	// Chain name, e.g. celestia.
 	Name string
 	// How many validators and how many full nodes to use when instantiating the chain.

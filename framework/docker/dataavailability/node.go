@@ -149,10 +149,7 @@ func (n *Node) GetNetworkInfo(ctx context.Context) (types.NetworkInfo, error) {
 	}, nil
 }
 
-// Stop terminates the Node by stopping its associated container gracefully using the provided context.
-func (n *Node) Stop(ctx context.Context) error {
-	return n.StopContainer(ctx)
-}
+
 
 // Start initializes and starts the Node with the provided options in the given context.
 // It returns an error if the node initialization or startup fails.

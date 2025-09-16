@@ -2,7 +2,8 @@ package types
 
 import (
 	"context"
-	"github.com/celestiaorg/go-square/v2/share"
+
+	"github.com/celestiaorg/go-square/v3/share"
 	"github.com/cosmos/cosmos-sdk/client"
 	sdktx "github.com/cosmos/cosmos-sdk/client/tx"
 	sdk "github.com/cosmos/cosmos-sdk/types"

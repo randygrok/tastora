@@ -16,7 +16,7 @@ require (
 	cosmossdk.io/math v1.4.0
 	github.com/BurntSushi/toml v1.5.0
 	github.com/avast/retry-go/v4 v4.6.1
-	github.com/celestiaorg/go-square/v3 v3.0.0-rc0
+	github.com/celestiaorg/go-square/v3 v3.0.0
 	github.com/cometbft/cometbft v0.38.12
 	github.com/cosmos/cosmos-sdk v0.50.9
 	github.com/cosmos/go-bip39 v1.0.0

@@ -12,7 +12,7 @@ import (
 	"strconv"
 	"sync"
 
-	"github.com/celestiaorg/go-square/v2/share"
+	"github.com/celestiaorg/go-square/v3/share"
 	"github.com/celestiaorg/tastora/framework/docker/container"
 	"github.com/celestiaorg/tastora/framework/docker/internal"
 	dockerutil "github.com/celestiaorg/tastora/framework/testutil/docker"
@@ -148,8 +148,6 @@ func (n *Node) GetNetworkInfo(ctx context.Context) (types.NetworkInfo, error) {
 		},
 	}, nil
 }
-
-
 
 // Start initializes and starts the Node with the provided options in the given context.
 // It returns an error if the node initialization or startup fails.

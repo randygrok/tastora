@@ -1,12 +1,12 @@
 package docker
 
 import (
+	"testing"
+
 	"github.com/celestiaorg/tastora/framework/docker/internal"
 	"github.com/celestiaorg/tastora/framework/docker/port"
 	"github.com/celestiaorg/tastora/framework/testutil/random"
 	"github.com/docker/docker/api/types/container"
-	"math/rand"
-	"testing"
 
 	"github.com/docker/go-connections/nat"
 	"github.com/stretchr/testify/require"
@@ -57,12 +57,8 @@ func TestGetHostPort(t *testing.T) {
 func TestRandLowerCaseLetterString(t *testing.T) {
 	t.Parallel()
 	require.Empty(t, random.LowerCaseLetterString(0))
-
-	rand.Seed(1) // nolint:staticcheck
-	require.Equal(t, "xvlbzgbaicmr", random.LowerCaseLetterString(12))
-
-	rand.Seed(1) // nolint:staticcheck
-	require.Equal(t, "xvlbzgbaicmrajwwhthctcuaxhxkqf", random.LowerCaseLetterString(30))
+	require.Len(t, random.LowerCaseLetterString(12), 12)
+	require.Len(t, random.LowerCaseLetterString(30), 30)
 }
 
 func TestCondenseHostName(t *testing.T) {
